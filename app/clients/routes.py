@@ -1,0 +1,255 @@
+from flask import render_template, redirect, url_for, flash, request, abort, jsonify
+from flask_login import login_required
+from app.clients import bp
+from app.clients.forms import ClientForm
+from app.clients.utils import generate_client_config, apply_client_to_server, generate_xray_keys, generate_wg_keys, \
+    remove_client_from_server, get_next_client_ip, generate_wg_psk
+from app.models import Client, Server, ServerProtocol
+from app.extensions import db
+from app.utils.crypto import encrypt_data, decrypt_data
+from app.tasks import apply_client_task, remove_client_task
+import json
+
+
+@bp.route('/')
+@login_required
+def index():
+    clients = Client.query.order_by(Client.created_at.desc()).all()
+    return render_template('clients/index.html', clients=clients)
+
+
+@bp.route('/create', methods=['GET', 'POST'])
+@login_required
+def create():
+    form = ClientForm()
+
+    # Заполняем списки
+    form.server_id.choices = [(0, '--- Выберите сервер ---')] + [(s.id, f"{s.name} ({s.ip})") for s in Server.query.order_by(Server.name).all()]
+    
+    protocols = ServerProtocol.query.filter_by(status='installed').order_by(ServerProtocol.protocol_type).all()
+    form.protocol_id.choices = [(0, '--- Выберите протокол ---')] + [(p.id, f"{p.protocol_type.upper()} (сервер: {p.server.name})") for p in protocols]
+    
+    from app.models import ServerGroup
+    form.group_id.choices = [(0, '--- Выберите группу ---')] + [(g.id, g.name) for g in ServerGroup.query.order_by(ServerGroup.name).all()]
+
+    if form.validate_on_submit():
+        client = Client(
+            name=form.name.data,
+            email=form.email.data,
+            traffic_limit_bytes=int(form.traffic_limit.data) * 1024 ** 3 if form.traffic_limit.data else 0,
+            expiry_date=form.expiry_date.data,
+            status='pending'
+        )
+
+        if form.selection_type.data == 'server':
+            if not form.server_id.data or form.server_id.data == 0:
+                flash('Выберите сервер', 'danger')
+                return render_template('clients/create.html', form=form)
+            
+            protocol = ServerProtocol.query.get(form.protocol_id.data)
+            if not protocol or protocol.server_id != form.server_id.data:
+                flash('Ошибка: выбранный протокол не соответствует серверу.', 'danger')
+                return render_template('clients/create.html', form=form)
+            
+            client.server_id = form.server_id.data
+            client.protocol_id = form.protocol_id.data
+            client.protocol_type = protocol.protocol_type
+        else:
+            if not form.group_id.data or form.group_id.data == 0:
+                flash('Выберите группу серверов', 'danger')
+                return render_template('clients/create.html', form=form)
+            
+            client.group_id = form.group_id.data
+            client.protocol_type = form.protocol_type.data
+
+        db.session.add(client)
+        db.session.commit()
+
+        # Генерируем ключи
+        _generate_keys_internal(client)
+        
+        # Запускаем применение асинхронно
+        apply_client_task.delay(client.id)
+        
+        flash(f'Клиент {client.name} создан и отправлен на установку.', 'success')
+        return redirect(url_for('clients.view', id=client.id))
+
+    return render_template('clients/create.html', form=form)
+
+
+def _generate_keys_internal(client):
+    """Внутренняя функция генерации ключей (без редиректов и flash)"""
+    protocol_type = client.protocol_type
+    if not protocol_type and client.protocol:
+        protocol_type = client.protocol.protocol_type
+
+    if protocol_type == 'awg':
+        private_key, public_key = generate_wg_keys()
+        psk = generate_wg_psk()
+        client.public_key = public_key
+        client.private_key_encrypted = encrypt_data(private_key)
+        extra_params = dict(client.extra_params or {})
+        extra_params['psk'] = encrypt_data(psk)
+        
+        if 'assigned_ip' not in extra_params:
+            # Для групп IP должен быть уникальным во всей группе. 
+            # Для простоты используем глобальный инкремент или случайный IP в подсети
+            # В данном примере просто берем следующий свободный на первом сервере группы
+            ref_server_id = client.server_id
+            ref_protocol_id = client.protocol_id
+            
+            if not ref_server_id and client.group:
+                # Берем первый сервер из группы как эталонный для выдачи IP
+                first_server = client.group.servers[0] if client.group.servers else None
+                if first_server:
+                    ref_server_id = first_server.id
+                    proto = next((p for p in first_server.protocols if p.protocol_type == 'awg'), None)
+                    if proto: ref_protocol_id = proto.id
+
+            if ref_server_id and ref_protocol_id:
+                assigned_ip = get_next_client_ip(ref_server_id, ref_protocol_id)
+                extra_params['assigned_ip'] = assigned_ip
+            
+        client.extra_params = extra_params
+        db.session.commit()
+
+    elif protocol_type == 'xray':
+        uuid_val = generate_xray_keys()
+        extra_params = dict(client.extra_params or {})
+        extra_params['uuid'] = uuid_val
+        extra_params['email'] = client.email or f"{client.name}@client"
+        client.extra_params = extra_params
+        db.session.commit()
+
+
+@bp.route('/<int:id>')
+@login_required
+def view(id):
+    client = Client.query.get_or_404(id)
+    return render_template('clients/view.html', client=client)
+
+
+@bp.route('/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit(id):
+    client = Client.query.get_or_404(id)
+    form = ClientForm(obj=client)
+
+    # Заполняем списки
+    form.server_id.choices = [(s.id, f"{s.name} ({s.ip})") for s in Server.query.order_by(Server.name).all()]
+    protocols = ServerProtocol.query.filter_by(status='installed').order_by(ServerProtocol.protocol_type).all()
+    form.protocol_id.choices = [(p.id, f"{p.protocol_type.upper()} (сервер: {p.server.name})") for p in protocols]
+
+    if form.validate_on_submit():
+        # Проверяем соответствие сервера и протокола
+        protocol = ServerProtocol.query.get(form.protocol_id.data)
+        if protocol.server_id != form.server_id.data:
+            flash('Ошибка: выбранный протокол не соответствует серверу.', 'danger')
+            return redirect(url_for('clients.edit', id=id))
+
+        client.name = form.name.data
+        client.email = form.email.data
+        client.server_id = form.server_id.data
+        client.protocol_id = form.protocol_id.data
+        client.traffic_limit_bytes = int(form.traffic_limit.data) * 1024 ** 3 if form.traffic_limit.data else 0
+        client.expiry_date = form.expiry_date.data
+
+        db.session.commit()
+        flash('Данные клиента обновлены. Чтобы применить изменения на сервере, нажмите "Применить".', 'info')
+        return redirect(url_for('clients.view', id=id))
+
+    # Предзаполняем форму
+    form.traffic_limit.data = client.traffic_limit_bytes // 1024 ** 3 if client.traffic_limit_bytes else 0
+    return render_template('clients/edit.html', form=form, client=client)
+
+
+@bp.route('/<int:id>/delete', methods=['POST'])
+@login_required
+def delete(id):
+    client = Client.query.get_or_404(id)
+    # Запускаем удаление асинхронно
+    remove_client_task.delay(client.id)
+    flash(f'Запущено удаление клиента {client.name} с сервера.', 'info')
+    return redirect(url_for('clients.index'))
+
+
+@bp.route('/<int:id>/generate-keys', methods=['POST'])
+@login_required
+def generate_keys(id):
+    client = Client.query.get_or_404(id)
+    try:
+        _generate_keys_internal(client)
+        flash('Ключи успешно сгенерированы.', 'success')
+    except Exception as e:
+        flash(f'Ошибка генерации ключей: {str(e)}', 'danger')
+    
+    return redirect(url_for('clients.view', id=client.id))
+
+
+@bp.route('/<int:id>/apply', methods=['POST'])
+@login_required
+def apply_to_server(id):
+    client = Client.query.get_or_404(id)
+
+    # Определяем тип протокола универсально
+    proto_type = client.protocol_type
+    if not proto_type and client.protocol:
+        proto_type = client.protocol.protocol_type
+
+    # Проверяем наличие необходимых ключей
+    if proto_type == 'awg' and not client.public_key:
+        flash('Сначала сгенерируйте ключи.', 'warning')
+        return redirect(url_for('clients.view', id=id))
+    if proto_type == 'xray' and (not client.extra_params or 'uuid' not in client.extra_params):
+        flash('Сначала сгенерируйте UUID.', 'warning')
+        return redirect(url_for('clients.view', id=id))
+
+    # Запускаем асинхронно
+    apply_client_task.delay(client.id)
+    flash(f'Задача применения клиента {client.name} отправлена в очередь.', 'info')
+
+    return redirect(url_for('clients.view', id=client.id))
+
+
+@bp.route('/<int:id>/config')
+@login_required
+def download_config(id):
+    client = Client.query.get_or_404(id)
+    config = generate_client_config(client)
+
+    if not config:
+        flash('Не удалось сгенерировать конфиг. Убедитесь, что клиент активен и ключи сгенерированы.', 'danger')
+        return redirect(url_for('clients.view', id=id))
+
+    # Отдаём как файл
+    from flask import Response
+    filename = f"{client.name}.vpn"
+    mimetype = 'text/plain'
+
+    return Response(
+        config,
+        mimetype=mimetype,
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+
+@bp.route('/<int:id>/config-text')
+@login_required
+def config_text(id):
+    client = Client.query.get_or_404(id)
+    config = generate_client_config(client)
+    if not config:
+        abort(404)
+    from flask import Response
+    return Response(config, mimetype='text/plain')
+
+
+@bp.route('/api/servers/<int:server_id>/protocols')
+@login_required
+def api_server_protocols(server_id):
+    protocols = ServerProtocol.query.filter_by(server_id=server_id, status='installed').all()
+    return jsonify([{
+        'id': p.id,
+        'protocol_type': p.protocol_type,
+        'port': p.port
+    } for p in protocols])

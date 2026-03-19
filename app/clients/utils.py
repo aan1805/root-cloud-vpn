@@ -1,0 +1,413 @@
+import base64
+import json
+import subprocess
+import time
+import uuid
+import re
+
+from app import db
+from app.utils.crypto import encrypt_data, decrypt_data
+from app.servers.ssh import execute_ssh_command
+
+
+def generate_wg_keys():
+    """Генерирует пару ключей WireGuard локально"""
+    try:
+        # Генерируем приватный ключ
+        private_key = subprocess.check_output(['wg', 'genkey']).decode().strip()
+        # Генерируем публичный ключ из приватного
+        proc = subprocess.Popen(['wg', 'pubkey'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        public_key, _ = proc.communicate(input=private_key.encode())
+        public_key = public_key.decode().strip()
+        return private_key, public_key
+    except Exception as e:
+        # fallback: если wg не установлен, используем встроенную генерацию (например, через cryptography)
+        # Для простоты пока вызовем ошибку
+        raise RuntimeError(f"WireGuard tools not available: {e}")
+
+
+def generate_xray_keys():
+    """Генерирует UUID для XRay"""
+    return str(uuid.uuid4())
+
+
+def get_next_client_ip(server_id, protocol_id):
+    """
+    Определяет следующий свободный IP адрес для клиента в подсети 10.8.0.0/24
+    Возвращает строку вида "10.8.0.X"
+    """
+    from app.models import Client
+
+    # Получаем все IP, уже назначенные клиентам на этом сервере и протоколе
+    existing_ips = Client.query.filter_by(
+        server_id=server_id,
+        protocol_id=protocol_id
+    ).all()
+
+    used_ips = set()
+    for client in existing_ips:
+        if client.extra_params and 'assigned_ip' in client.extra_params:
+            ip = client.extra_params['assigned_ip']
+            # Извлекаем последний октет
+            match = re.search(r'10\.8\.0\.(\d+)', ip)
+            if match:
+                used_ips.add(int(match.group(1)))
+
+    # Ищем первый свободный IP от 2 до 254 (10.8.0.1 занят сервером)
+    for i in range(2, 255):
+        if i not in used_ips:
+            return f"10.8.0.{i}"
+
+    # Если все IP заняты (маловероятно для /24 подсети)
+    raise ValueError("Нет свободных IP адресов в подсети 10.8.0.0/24")
+
+
+def apply_client_to_server(client):
+    """
+    Добавляет клиента на сервер через SSH
+    Возвращает (success, message)
+    """
+    server = client.server
+    protocol = client.protocol
+
+    # Расшифровываем SSH-ключ
+    ssh_key = decrypt_data(server.ssh_key_encrypted)
+    passphrase = decrypt_data(server.ssh_key_passphrase_encrypted) if server.ssh_key_passphrase_encrypted else None
+
+    if protocol.protocol_type == 'awg':
+        assigned_ip = client.extra_params['assigned_ip']
+
+        public_key = client.public_key
+        psk_encrypted = client.extra_params.get('psk')
+        psk = decrypt_data(psk_encrypted) if psk_encrypted else None
+
+        commands = []
+
+        # Формируем команду для добавления пира в WireGuard
+        if psk:
+            psk = psk.strip()
+            temp_file = f"/tmp/psk_{client.id}_{int(time.time())}"
+            commands = [
+                f"printf '%s' '{psk}' | sudo tee {temp_file} > /dev/null",
+                f"sudo awg set wg0 peer {public_key} preshared-key {temp_file} allowed-ips {assigned_ip}/32",
+                f"sudo rm {temp_file}"
+            ]
+        else:
+            commands.append(f"sudo awg set wg0 peer {public_key} allowed-ips {assigned_ip}/32")
+
+        # Сохраняем конфигурацию
+        commands.append("sudo awg-quick save /opt/amnezia/awg/conf/wg0.conf")
+
+        # Объединяем команды
+        full_command = " && ".join(commands)
+
+        # Выполняем команды
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, full_command, passphrase
+        )
+
+        if exit_code == 0:
+            return True, f"Клиент добавлен в WireGuard с IP {assigned_ip}"
+        else:
+            return False, stderr or stdout
+
+    elif protocol.protocol_type == 'xray':
+        # Команда для получения конфига
+        get_cmd = "cat /opt/amnezia/xray/config.json"
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, get_cmd, passphrase
+        )
+        if exit_code != 0:
+            return False, "Не удалось прочитать конфиг XRay"
+
+        try:
+            config = json.loads(stdout)
+        except:
+            return False, "Ошибка парсинга JSON"
+
+        # Добавляем клиента в конфиг
+        for inbound in config.get('inbounds', []):
+            if inbound.get('protocol') == 'vless' and inbound.get('streamSettings', {}).get(
+                    'security') == 'reality':
+                clients = inbound['settings'].setdefault('clients', [])
+                new_client = {
+                    'id': client.extra_params.get('uuid'),
+                    'email': client.email or f"{client.name}@example.com",
+                    'flow': 'xtls-rprx-vision'
+                }
+                clients.append(new_client)
+                break
+
+        # Сохраняем конфиг
+        new_config_json = json.dumps(config, indent=2)
+        escaped_json = new_config_json.replace("'", "'\\''")
+        write_cmd = f"echo '{escaped_json}' | sudo tee /opt/amnezia/xray/config.json > /dev/null"
+
+        execute_ssh_command(server.ip, server.ssh_port, server.ssh_username,
+                            ssh_key, write_cmd, passphrase)
+
+        # Отправляем сигнал HUP для перезагрузки конфигурации без остановки соединений
+        hup_cmd = "sudo docker exec xray-reality kill -HUP 1"
+
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, hup_cmd, passphrase
+        )
+
+        if exit_code == 0:
+            return True, "Клиент добавлен (конфиг перезагружен через HUP)"
+        else:
+            return False, f"Ошибка отправки HUP: {stderr or stdout}"
+
+    else:
+        return False, f"Неподдерживаемый протокол: {protocol.protocol_type}"
+
+
+def remove_client_from_server(client):
+    """
+    Удаляет клиента с сервера через SSH
+    Возвращает (success, message)
+    """
+    server = client.server
+    protocol = client.protocol
+
+    # Расшифровываем SSH-ключ
+    ssh_key = decrypt_data(server.ssh_key_encrypted)
+    passphrase = decrypt_data(server.ssh_key_passphrase_encrypted) if server.ssh_key_passphrase_encrypted else None
+
+    if protocol.protocol_type == 'awg':
+        public_key = client.public_key
+        command = f"sudo awg set wg0 peer {public_key} remove"
+
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, command, passphrase
+        )
+
+        if exit_code == 0:
+            save_cmd = "sudo awg-quick save /opt/amnezia/awg/conf/wg0.conf"
+            execute_ssh_command(server.ip, server.ssh_port, server.ssh_username, ssh_key, save_cmd, passphrase)
+
+            if 'assigned_ip' in client.extra_params:
+                del client.extra_params['assigned_ip']
+                db.session.commit()
+
+            return True, "Клиент удален из WireGuard"
+        else:
+            return False, stderr or stdout
+
+    elif protocol.protocol_type == 'xray':
+        get_cmd = "cat /opt/amnezia/xray/config.json"
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, get_cmd, passphrase
+        )
+
+        if exit_code != 0:
+            return False, "Не удалось прочитать конфиг XRay"
+
+        try:
+            config = json.loads(stdout)
+        except json.JSONDecodeError as e:
+            return False, f"Ошибка парсинга JSON: {str(e)}"
+
+        client_removed = False
+        client_uuid = client.extra_params.get('uuid')
+        client_email = client.email or f"{client.name}@example.com"
+
+        for inbound in config.get('inbounds', []):
+            if inbound.get('protocol') == 'vless' and inbound.get('streamSettings', {}).get('security') == 'reality':
+                clients = inbound['settings'].get('clients', [])
+                original_count = len(clients)
+                inbound['settings']['clients'] = [
+                    c for c in clients
+                    if c.get('id') != client_uuid and c.get('email') != client_email
+                ]
+
+                if len(inbound['settings']['clients']) < original_count:
+                    client_removed = True
+                break
+
+        if not client_removed:
+            return False, "Клиент не найден в конфиге"
+
+        new_config_json = json.dumps(config, indent=2)
+        escaped_json = new_config_json.replace("'", "'\\''")
+        write_cmd = f"echo '{escaped_json}' | sudo tee /opt/amnezia/xray/config.json > /dev/null"
+
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, write_cmd, passphrase
+        )
+
+        if exit_code != 0:
+            return False, f"Не удалось записать конфиг: {stderr or stdout}"
+
+        restart_cmd = "sudo docker exec xray-reality kill -HUP 1"
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, restart_cmd, passphrase
+        )
+
+        if exit_code == 0:
+            return True, "Клиент удален из XRay"
+        else:
+            return False, f"Ошибка перезапуска XRay: {stderr or stdout}"
+
+    return False, f"Неподдерживаемый протокол: {protocol.protocol_type}"
+
+
+def generate_client_config(client):
+    """Генерирует конфигурационный файл для клиента"""
+    # Определяем адрес подключения (Endpoint)
+    connection_address = client.server.ip if client.server else None
+    connection_port = client.protocol.port if client.protocol else None
+
+    if client.group_id:
+        from app.models import HaproxyBackend
+        # Сначала ищем бэкенд для конкретной группы клиента, затем бэкенд без группы (все серверы)
+        backend = HaproxyBackend.query.filter_by(
+            protocol_type=client.protocol_type,
+            group_id=client.group_id
+        ).first()
+        if not backend:
+            backend = HaproxyBackend.query.filter_by(
+                protocol_type=client.protocol_type,
+                group_id=None
+            ).first()
+        if backend:
+            connection_address = backend.haproxy_server.ip
+            connection_port = backend.port
+
+    if not connection_address:
+        return None
+
+    proto_type = client.protocol_type or (client.protocol.protocol_type if client.protocol else None)
+
+    if proto_type == 'awg':
+        return generate_amnezia_vpn_uri(client, connection_address, connection_port)
+
+    elif proto_type == 'xray':
+        uuid = client.extra_params.get('uuid')
+        public_key = None
+        if client.protocol:
+            public_key = client.protocol.config_params.get('public_key')
+        elif client.group:
+            for srv in client.group.servers:
+                proto = next((p for p in srv.protocols if p.protocol_type == 'xray' and p.status == 'installed'), None)
+                if proto:
+                    public_key = proto.config_params.get('public_key')
+                    break
+        
+        params = {
+            'security': 'reality',
+            'encryption': 'none',
+            'pbk': public_key,
+            'sid': '6ba85179e30d4fc2',
+            'type': 'tcp',
+            'flow': 'xtls-rprx-vision',
+            'sni': 'www.microsoft.com'
+        }
+        query = '&'.join([f"{k}={v}" for k, v in params.items() if v])
+        return f"vless://{uuid}@{connection_address}:{connection_port}?{query}#{client.name}"
+
+    return None
+
+def generate_amnezia_vpn_uri(client, address, port):
+    """Генерирует конфиг для AmneziaWG"""
+    params = {}
+    if client.protocol:
+        params = client.protocol.config_params
+    elif client.group:
+         for srv in client.group.servers:
+            proto = next((p for p in srv.protocols if p.protocol_type == 'awg' and p.status == 'installed'), None)
+            if proto:
+                params = proto.config_params
+                break
+
+    assigned_ip = client.extra_params.get('assigned_ip')
+    private_key = decrypt_data(client.private_key_encrypted) if client.private_key_encrypted else ""
+    psk = decrypt_data(client.extra_params.get('psk')) if client.extra_params.get('psk') else None
+
+    return generate_awg_config(client, params, assigned_ip, private_key, psk, address, port)
+
+def generate_awg_config(client, params, assigned_ip, private_key, psk="", address=None, port=None):
+    """Генерирует конфиг AmneziaWG 2.0 в формате INI"""
+    if not address: address = client.server.ip if client.server else ""
+    if not port: port = client.protocol.port if client.protocol else ""
+
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {assigned_ip}/24",
+        "DNS = 8.8.8.8",
+        f"Jc = {params.get('jc', 5)}",
+        f"Jmin = {params.get('jmin', 30)}",
+        f"Jmax = {params.get('jmax', 50)}",
+        f"S1 = {params.get('s1', 220)}",
+        f"S2 = {params.get('s2', 230)}",
+        f"H1 = {params.get('h1', 1855549004)}",
+        f"H2 = {params.get('h2', 2882373428)}",
+        f"H3 = {params.get('h3', 3625691520)}",
+        f"H4 = {params.get('h4', 3868285620)}",
+        f"MTU = {params.get('mtu', 1420)}",
+        "",
+        "[Peer]",
+        f"PublicKey = {params.get('server_public_key')}",
+        f"Endpoint = {address}:{port}",
+        "AllowedIPs = 0.0.0.0/0",
+        "PersistentKeepalive = 25"
+    ]
+    if psk:
+        lines.insert(-4, f"PresharedKey = {psk}")
+
+    return "\n".join(lines)
+
+def generate_wg_psk():
+    import secrets
+    import base64
+    return base64.b64encode(secrets.token_bytes(32)).decode()
+
+
+def generate_keys_for_client(client):
+    """Generate keys for a client (AWG or XRay). Used by portal and admin routes."""
+    protocol_type = client.protocol_type
+    if not protocol_type and client.protocol:
+        protocol_type = client.protocol.protocol_type
+
+    if protocol_type == 'awg':
+        private_key, public_key = generate_wg_keys()
+        psk = generate_wg_psk()
+        client.public_key = public_key
+        client.private_key_encrypted = encrypt_data(private_key)
+        extra_params = dict(client.extra_params or {})
+        extra_params['psk'] = encrypt_data(psk)
+
+        if 'assigned_ip' not in extra_params:
+            ref_server_id = client.server_id
+            ref_protocol_id = client.protocol_id
+
+            if not ref_server_id and client.group:
+                first_server = client.group.servers[0] if client.group.servers else None
+                if first_server:
+                    ref_server_id = first_server.id
+                    proto = next((p for p in first_server.protocols if p.protocol_type == 'awg'), None)
+                    if proto:
+                        ref_protocol_id = proto.id
+
+            if ref_server_id and ref_protocol_id:
+                assigned_ip = get_next_client_ip(ref_server_id, ref_protocol_id)
+                extra_params['assigned_ip'] = assigned_ip
+
+        client.extra_params = extra_params
+        db.session.commit()
+
+    elif protocol_type == 'xray':
+        uuid_val = generate_xray_keys()
+        extra_params = dict(client.extra_params or {})
+        extra_params['uuid'] = uuid_val
+        extra_params['email'] = client.email or f"{client.name}@client"
+        client.extra_params = extra_params
+        db.session.commit()

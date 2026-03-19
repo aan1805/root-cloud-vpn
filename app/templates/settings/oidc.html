@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0 fw-bold">OIDC / User Portal</h4>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Настройки провайдера</div>
+            <div class="card-body">
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label">Provider URL <span class="text-danger">*</span></label>
+                        <input type="url" name="provider_url" class="form-control"
+                               value="{{ setting.provider_url if setting else '' }}"
+                               placeholder="https://your-oidc-provider.example.com" required>
+                        <div class="form-text">Базовый URL OIDC провайдера (без .well-known/...)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Client ID <span class="text-danger">*</span></label>
+                        <input type="text" name="client_id" class="form-control"
+                               value="{{ setting.client_id if setting else '' }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Client Secret</label>
+                        <input type="password" name="client_secret" class="form-control"
+                               placeholder="{% if setting %}Оставьте пустым, чтобы не менять{% else %}Введите секрет{% endif %}">
+                    </div>
+
+                    <hr>
+                    <p class="fw-semibold mb-2">Авто-провизионирование VPN</p>
+                    <p class="text-muted small">При первом входе нового пользователя автоматически создаётся VPN клиент.</p>
+
+                    <div class="mb-3">
+                        <label class="form-label">Группа серверов</label>
+                        <select name="auto_group_id" class="form-select">
+                            <option value="">— не использовать —</option>
+                            {% for g in groups %}
+                            <option value="{{ g.id }}" {% if setting and setting.auto_group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Конкретный сервер (альтернатива группе)</label>
+                        <select name="auto_server_id" class="form-select">
+                            <option value="">— не использовать —</option>
+                            {% for s in servers %}
+                            <option value="{{ s.id }}" {% if setting and setting.auto_server_id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.ip }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Протокол</label>
+                        <select name="auto_protocol_type" class="form-select">
+                            <option value="">— не использовать —</option>
+                            <option value="awg" {% if setting and setting.auto_protocol_type == 'awg' %}selected{% endif %}>AWG (AmneziaWG)</option>
+                            <option value="xray" {% if setting and setting.auto_protocol_type == 'xray' %}selected{% endif %}>XRay (VLESS)</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save"></i> Сохранить
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-5">
+        <div class="card border-info">
+            <div class="card-header bg-info bg-opacity-10 border-0 fw-semibold text-info">
+                <i class="bi bi-info-circle"></i> Callback URL для регистрации
+            </div>
+            <div class="card-body">
+                <p class="mb-1 small text-muted">Зарегистрируйте этот URL в настройках вашего OIDC провайдера:</p>
+                <div class="input-group">
+                    <input type="text" class="form-control form-control-sm font-monospace"
+                           id="callbackUrl" value="{{ request.host_url.rstrip('/') }}/portal/callback" readonly>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('callbackUrl').value)">
+                        <i class="bi bi-clipboard"></i>
+                    </button>
+                </div>
+                <hr>
+                <p class="small text-muted mb-0">
+                    <strong>Портал пользователей:</strong><br>
+                    <a href="/portal/" target="_blank">{{ request.host_url.rstrip('/') }}/portal/</a>
+                </p>
+            </div>
+        </div>
+
+        {% if not setting %}
+        <div class="alert alert-warning mt-3">
+            <i class="bi bi-exclamation-triangle"></i>
+            OIDC не настроен. Портал пользователей недоступен.
+        </div>
+        {% else %}
+        <div class="card mt-3">
+            <div class="card-header bg-white border-0 fw-semibold">Текущая конфигурация</div>
+            <div class="card-body small">
+                <p><strong>Provider:</strong> {{ setting.provider_url }}</p>
+                <p><strong>Client ID:</strong> {{ setting.client_id }}</p>
+                <p class="mb-0"><strong>Авто-провизионирование:</strong>
+                    {% if setting.auto_protocol_type %}
+                        {{ setting.auto_protocol_type.upper() }}
+                        {% if setting.auto_group %}в группе "{{ setting.auto_group.name }}"{% endif %}
+                        {% if setting.auto_server %}на сервере "{{ setting.auto_server.name }}"{% endif %}
+                    {% else %}
+                        отключено
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

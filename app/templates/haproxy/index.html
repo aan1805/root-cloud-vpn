@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>HAProxy балансировщики</h1>
+    <a href="{{ url_for('haproxy.add_server') }}" class="btn btn-success">Добавить HAProxy сервер</a>
+</div>
+
+<div class="row">
+    {% for server in servers %}
+    <div class="col-md-6 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">{{ server.name }}</h5>
+                <p class="card-text">
+                    <strong>IP:</strong> {{ server.ip }}<br>
+                    <strong>Статус:</strong> 
+                    {% if server.status == 'active' %}
+                        <span class="badge bg-success">Активен</span>
+                    {% else %}
+                        <span class="badge bg-danger">Неактивен</span>
+                    {% endif %}
+                </p>
+                <a href="{{ url_for('haproxy.view_server', server_id=server.id) }}" class="btn btn-primary">Управление</a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12">
+        <div class="alert alert-info">Нет добавленных HAProxy серверов</div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

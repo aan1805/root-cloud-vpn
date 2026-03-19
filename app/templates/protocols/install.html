@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Установка протокола на сервер {{ server.name }}</h1>
+<form method="POST">
+    {{ form.hidden_tag() }}
+    <div class="mb-3">
+        {{ form.protocol_type.label(class="form-label") }}
+        {{ form.protocol_type(class="form-select") }}
+    </div>
+    <div class="mb-3">
+        {{ form.port.label(class="form-label") }}
+        {{ form.port(class="form-control") }}
+    </div>
+    <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
+    <a href="{{ url_for('protocols.index', server_id=server.id) }}" class="btn btn-secondary">Отмена</a>
+</form>
+{% endblock %}

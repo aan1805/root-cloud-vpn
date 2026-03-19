@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Root-Cloud</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rootcloud.css') }}">
+</head>
+<body>
+<div id="wrapper">
+    {% if current_user.is_authenticated %}
+    <!-- Sidebar -->
+    <nav id="sidebar">
+        <a class="sidebar-brand" href="{{ url_for('index') }}">
+            <i class="bi bi-cloud-fill text-primary"></i> Root-Cloud
+        </a>
+
+        <ul class="nav flex-column mt-2">
+            <li class="nav-section">Управление</li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}"
+                   href="{{ url_for('index') }}">
+                    <i class="bi bi-speedometer2"></i> Дашборд
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'servers' %}active{% endif %}"
+                   href="{{ url_for('servers.index') }}">
+                    <i class="bi bi-server"></i> Серверы
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'groups' %}active{% endif %}"
+                   href="{{ url_for('groups.index') }}">
+                    <i class="bi bi-diagram-3"></i> Группы
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'clients' %}active{% endif %}"
+                   href="{{ url_for('clients.index') }}">
+                    <i class="bi bi-people"></i> Клиенты
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.blueprint == 'haproxy' %}active{% endif %}"
+                   href="{{ url_for('haproxy.index') }}">
+                    <i class="bi bi-arrow-left-right"></i> HAProxy
+                </a>
+            </li>
+
+            <li class="nav-section">Настройки</li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'main.tokens' %}active{% endif %}"
+                   href="{{ url_for('main.tokens') }}">
+                    <i class="bi bi-key"></i> API токены
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'main.oidc_settings' %}active{% endif %}"
+                   href="{{ url_for('main.oidc_settings') }}">
+                    <i class="bi bi-shield-lock"></i> OIDC / Портал
+                </a>
+            </li>
+        </ul>
+    </nav>
+    {% endif %}
+
+    <!-- Content Wrapper -->
+    <div id="content-wrapper">
+        {% if current_user.is_authenticated %}
+        <!-- Topbar -->
+        <div id="topbar">
+            <button class="sidebar-toggle" id="sidebarToggle" title="Меню">
+                <i class="bi bi-list"></i>
+            </button>
+            <span class="ms-auto d-flex align-items-center gap-2">
+                <div class="dropdown">
+                    <a class="btn btn-sm btn-outline-secondary dropdown-toggle" href="#" data-bs-toggle="dropdown">
+                        <i class="bi bi-person-circle"></i> {{ current_user.username }}
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}">
+                            <i class="bi bi-box-arrow-right"></i> Выйти
+                        </a></li>
+                    </ul>
+                </div>
+            </span>
+        </div>
+        {% endif %}
+
+        <!-- Flash messages -->
+        <div id="page-content">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// Shared API helpers
+let apiToken = null;
+
+async function getApiToken() {
+    if (apiToken) return apiToken;
+    try {
+        const response = await fetch('/api/v1/session-token');
+        if (!response.ok) throw new Error('Failed to get token');
+        const data = await response.json();
+        apiToken = data.token;
+        return apiToken;
+    } catch (error) {
+        console.error('Error getting API token:', error);
+        return null;
+    }
+}
+
+async function apiFetch(url, options = {}) {
+    const token = await getApiToken();
+    if (!token) throw new Error('No API token available');
+    const headers = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...options.headers
+    };
+    const response = await fetch(url, { ...options, headers });
+    if (response.status === 401) {
+        apiToken = null;
+        return apiFetch(url, options);
+    }
+    return response;
+}
+
+// Sidebar toggle
+const sidebarToggle = document.getElementById('sidebarToggle');
+const sidebar = document.getElementById('sidebar');
+if (sidebarToggle && sidebar) {
+    sidebarToggle.addEventListener('click', () => {
+        sidebar.classList.toggle('show');
+    });
+}
+</script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

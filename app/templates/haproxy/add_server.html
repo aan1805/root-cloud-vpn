@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Добавление HAProxy сервера</h1>
+
+<form method="POST">
+    {{ form.hidden_tag() }}
+    
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control") }}
+            {% if form.name.errors %}
+                <div class="text-danger">{{ form.name.errors[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ form.ip.label(class="form-label") }}
+            {{ form.ip(class="form-control") }}
+            {% if form.ip.errors %}
+                <div class="text-danger">{{ form.ip.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            {{ form.ssh_port.label(class="form-label") }}
+            {{ form.ssh_port(class="form-control") }}
+            {% if form.ssh_port.errors %}
+                <div class="text-danger">{{ form.ssh_port.errors[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ form.ssh_username.label(class="form-label") }}
+            {{ form.ssh_username(class="form-control") }}
+            {% if form.ssh_username.errors %}
+                <div class="text-danger">{{ form.ssh_username.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="mb-3">
+        {{ form.ssh_key.label(class="form-label") }}
+        {{ form.ssh_key(class="form-control", rows=10) }}
+        <small class="text-muted">Вставьте содержимое приватного SSH ключа (включая BEGIN и END строки)</small>
+        {% if form.ssh_key.errors %}
+            <div class="text-danger">{{ form.ssh_key.errors[0] }}</div>
+        {% endif %}
+    </div>
+
+    <div class="mb-3">
+        {{ form.ssh_key_passphrase.label(class="form-label") }}
+        {{ form.ssh_key_passphrase(class="form-control") }}
+        <small class="text-muted">Если ключ защищён паролем</small>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.config_path.label(class="form-label") }}
+            {{ form.config_path(class="form-control") }}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.stats_socket_path.label(class="form-label") }}
+            {{ form.stats_socket_path(class="form-control") }}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.stats_port.label(class="form-label") }}
+            {{ form.stats_port(class="form-control") }}
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Добавить</button>
+    <a href="{{ url_for('haproxy.index') }}" class="btn btn-secondary">Отмена</a>
+</form>
+{% endblock %}

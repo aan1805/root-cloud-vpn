@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>HAProxy сервер: {{ server.name }}</h1>
+    <div>
+        <form action="{{ url_for('haproxy.reload_haproxy', server_id=server.id) }}" method="post" class="d-inline">
+            <button type="submit" class="btn btn-warning">Перезагрузить HAProxy</button>
+        </form>
+        <a href="{{ url_for('haproxy.add_backend', server_id=server.id) }}" class="btn btn-success">Добавить бэкенд</a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Информация о сервере</h5>
+                <p><strong>IP:</strong> {{ server.ip }}:{{ server.ssh_port }}</p>
+                <p><strong>SSH пользователь:</strong> {{ server.ssh_username }}</p>
+                <p><strong>Путь к конфигу:</strong> {{ server.config_path }}</p>
+                <p><strong>Stats socket:</strong> {{ server.stats_socket_path }}</p>
+                <p><strong>Статус:</strong> 
+                    {% if server.status == 'active' %}
+                        <span class="badge bg-success">Активен</span>
+                    {% else %}
+                        <span class="badge bg-danger">Неактивен</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Версия HAProxy</h5>
+                <pre class="bg-light p-2">{{ version }}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h5 class="card-title">Статус сервиса</h5>
+        <pre class="bg-light p-2">{{ stats }}</pre>
+    </div>
+</div>
+
+<h3>Бэкенды</h3>
+{% for backend in backends %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>{{ backend.name }} ({{ backend.protocol_type.upper() }})</span>
+        <div>
+            <form action="{{ url_for('haproxy.enable_backend', backend_id=backend.id) }}" method="post" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-success">Включить все</button>
+            </form>
+            <form action="{{ url_for('haproxy.disable_backend', backend_id=backend.id) }}" method="post" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-warning">Отключить все</button>
+            </form>
+            <a href="{{ url_for('haproxy.sync_backend', backend_id=backend.id) }}" class="btn btn-sm btn-info">Синхронизировать</a>
+            <form action="{{ url_for('haproxy.delete_backend', backend_id=backend.id) }}" method="post" class="d-inline" onsubmit="return confirm('Удалить этот бэкенд?');">
+                <button type="submit" class="btn btn-sm btn-danger">Удалить</button>
+            </form>
+        </div>
+    </div>
+    <div class="card-body">
+        <p><strong>Режим:</strong> {{ backend.mode }}, <strong>Алгоритм:</strong> {{ backend.balance_algorithm }}, <strong>Порт:</strong> {{ backend.port }}</p>
+        <h6>Серверы в бэкенде:</h6>
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Имя</th>
+                    <th>IP:порт</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for srv in backend.servers_json %}
+                <tr>
+                    <td>{{ srv.name }}</td>
+                    <td>{{ srv.ip }}:{{ srv.port }}</td>
+                    <td>
+                        {% if srv.status == 'active' %}
+                            <span class="badge bg-success">Активен</span>
+                        {% else %}
+                            <span class="badge bg-danger">Неактивен</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <!-- Здесь можно добавить индивидуальное включение/отключение, но это позже -->
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center">Нет серверов в бэкенде</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">Нет бэкендов. <a href="{{ url_for('haproxy.add_backend', server_id=server.id) }}">Добавить первый бэкенд</a></div>
+{% endfor %}
+
+<a href="{{ url_for('haproxy.index') }}" class="btn btn-secondary">← Назад к списку HAProxy серверов</a>
+{% endblock %}

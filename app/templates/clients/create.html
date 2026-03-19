@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Новый клиент</h1>
+
+<form method="POST">
+    {{ form.hidden_tag() }}
+    
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control") }}
+            {% if form.name.errors %}
+                <div class="text-danger">{{ form.name.errors[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ form.email.label(class="form-label") }}
+            {{ form.email(class="form-control") }}
+            {% if form.email.errors %}
+                <div class="text-danger">{{ form.email.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body bg-light">
+            <div class="mb-3">
+                {{ form.selection_type.label(class="form-label") }}
+                {{ form.selection_type(class="form-select", id="selection_type") }}
+            </div>
+
+            <!-- Поля для одиночного сервера -->
+            <div id="single_server_fields">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        {{ form.server_id.label(class="form-label") }}
+                        {{ form.server_id(class="form-select", id="server_select") }}
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        {{ form.protocol_id.label(class="form-label") }}
+                        {{ form.protocol_id(class="form-select", id="protocol_select") }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Поля для группы серверов -->
+            <div id="group_fields" style="display:none;">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        {{ form.group_id.label(class="form-label") }}
+                        {{ form.group_id(class="form-select") }}
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        {{ form.protocol_type.label(class="form-label") }}
+                        {{ form.protocol_type(class="form-select") }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            {{ form.traffic_limit.label(class="form-label") }}
+            {{ form.traffic_limit(class="form-control", placeholder="0 = безлимит") }}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ form.expiry_date.label(class="form-label") }}
+            {{ form.expiry_date(class="form-control", placeholder="YYYY-MM-DD HH:MM") }}
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
+    <a href="{{ url_for('clients.index') }}" class="btn btn-secondary">Отмена</a>
+</form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const selectionType = document.getElementById('selection_type');
+    const singleFields = document.getElementById('single_server_fields');
+    const groupFields = document.getElementById('group_fields');
+    const serverSelect = document.getElementById('server_select');
+    const protocolSelect = document.getElementById('protocol_select');
+
+    function toggleFields() {
+        if (selectionType.value === 'server') {
+            singleFields.style.display = 'block';
+            groupFields.style.display = 'none';
+        } else {
+            singleFields.style.display = 'none';
+            groupFields.style.display = 'block';
+        }
+    }
+
+    selectionType.addEventListener('change', toggleFields);
+    
+    // Инициализация при загрузке
+    toggleFields();
+
+    // Фильтрация протоколов при выборе сервера
+    serverSelect.addEventListener('change', function() {
+        const serverId = this.value;
+        if (serverId == "0") return;
+        
+        protocolSelect.innerHTML = '<option>Загрузка...</option>';
+        fetch('/api/servers/' + serverId + '/protocols')
+            .then(response => response.json())
+            .then(data => {
+                protocolSelect.innerHTML = '';
+                data.forEach(function(protocol) {
+                    const option = document.createElement('option');
+                    option.value = protocol.id;
+                    option.text = protocol.protocol_type.toUpperCase() + ' (порт ' + protocol.port + ')';
+                    protocolSelect.appendChild(option);
+                });
+            });
+    });
+});
+</script>
+{% endblock %}

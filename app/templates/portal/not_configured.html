@@ -1,0 +1,22 @@
+{% extends "portal/base.html" %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-6 text-center">
+        <div class="card">
+            <div class="card-body py-5">
+                <i class="bi bi-shield-x fs-1 text-muted mb-3 d-block"></i>
+                <h5 class="fw-bold">Портал не настроен</h5>
+                {% if error %}
+                <div class="alert alert-danger mt-3">{{ error }}</div>
+                {% else %}
+                <p class="text-muted">
+                    OIDC провайдер не сконфигурирован.<br>
+                    Обратитесь к администратору.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

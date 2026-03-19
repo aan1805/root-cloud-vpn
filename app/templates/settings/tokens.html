@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>API токены</h1>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h5 class="card-title">Создать новый токен</h5>
+        <form method="POST" action="{{ url_for('main.create_token') }}">
+            <div class="mb-3">
+                <label for="name" class="form-label">Название / Описание</label>
+                <input type="text" class="form-control" id="name" name="name" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Создать</button>
+        </form>
+    </div>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Название</th>
+            <th>Токен</th>
+            <th>Создан</th>
+            <th>Последнее использование</th>
+            <th>Статус</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for token in tokens %}
+        <tr>
+            <td>{{ token.name or '-' }}</td>
+            <td><code>{{ token.token[:20] }}...</code></td>
+            <td>{{ token.created_at.strftime('%Y-%m-%d') }}</td>
+            <td>{{ token.last_used_at.strftime('%Y-%m-%d %H:%M') if token.last_used_at else '-' }}</td>
+            <td>
+                {% if token.is_active %}
+                    <span class="badge bg-success">Активен</span>
+                {% else %}
+                    <span class="badge bg-danger">Отключен</span>
+                {% endif %}
+            </td>
+            <td>
+                <form method="POST" action="{{ url_for('main.toggle_token', id=token.id) }}" class="d-inline">
+                    <button type="submit" class="btn btn-sm btn-warning">
+                        {% if token.is_active %}Отключить{% else %}Включить{% endif %}
+                    </button>
+                </form>
+                <form method="POST" action="{{ url_for('main.delete_token', id=token.id) }}" class="d-inline" onsubmit="return confirm('Удалить токен?');">
+                    <button type="submit" class="btn btn-sm btn-danger">Удалить</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0 fw-bold">Дашборд</h4>
+</div>
+
+<!-- Stat cards -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="stat-icon bg-primary bg-opacity-10 text-primary">
+                    <i class="bi bi-server"></i>
+                </div>
+                <div>
+                    <div class="stat-value" id="total-servers">—</div>
+                    <div class="stat-label">Серверов (<span id="online-servers">0</span> онлайн)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="stat-icon bg-success bg-opacity-10 text-success">
+                    <i class="bi bi-people"></i>
+                </div>
+                <div>
+                    <div class="stat-value" id="total-clients">—</div>
+                    <div class="stat-label">Клиентов (<span id="active-clients">0</span> активных)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="stat-icon bg-info bg-opacity-10 text-info">
+                    <i class="bi bi-arrow-down-up"></i>
+                </div>
+                <div>
+                    <div class="stat-value" id="today-traffic">—</div>
+                    <div class="stat-label">Трафик сегодня</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="stat-icon bg-warning bg-opacity-10 text-warning">
+                    <i class="bi bi-calendar-month"></i>
+                </div>
+                <div>
+                    <div class="stat-value" id="month-traffic">—</div>
+                    <div class="stat-label">Трафик за месяц</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="row g-3 mb-4">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">
+                Трафик по дням (последние 30 дней)
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="trafficChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">
+                Топ 5 клиентов по трафику
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="topClientsChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tables -->
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Последние клиенты</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="recent-clients">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Имя</th>
+                            <th>Сервер</th>
+                            <th>Трафик</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Статус серверов</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="server-status">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Имя</th>
+                            <th>IP</th>
+                            <th>Статус</th>
+                            <th>Протоколы</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let trafficChart = null;
+let topClientsChart = null;
+
+async function loadDashboardData() {
+    try {
+        const summaryResponse = await apiFetch('/api/v1/stats/dashboard');
+        if (!summaryResponse.ok) throw new Error('Failed to load dashboard stats');
+        const summary = await summaryResponse.json();
+
+        document.getElementById('total-servers').textContent = summary.servers.total;
+        document.getElementById('online-servers').textContent = summary.servers.online;
+        document.getElementById('total-clients').textContent = summary.clients.total;
+        document.getElementById('active-clients').textContent = summary.clients.active;
+        document.getElementById('today-traffic').textContent = (summary.traffic.today_mb || 0).toFixed(1) + ' MB';
+        document.getElementById('month-traffic').textContent = (summary.traffic.month_gb || 0).toFixed(2) + ' GB';
+
+        const trafficResponse = await apiFetch('/api/v1/stats/traffic/server/all?days=30');
+        if (trafficResponse.ok) {
+            updateTrafficChart(await trafficResponse.json());
+        }
+
+        const clientsResponse = await apiFetch('/api/v1/clients?limit=10');
+        if (clientsResponse.ok) {
+            const clients = await clientsResponse.json();
+            updateClientsTable(clients);
+            updateTopClientsChart(clients);
+        }
+
+        const serversResponse = await apiFetch('/api/v1/servers');
+        if (serversResponse.ok) {
+            updateServersTable(await serversResponse.json());
+        }
+
+    } catch (error) {
+        console.error('Ошибка загрузки данных:', error);
+    }
+}
+
+function updateTrafficChart(trafficData) {
+    const ctx = document.getElementById('trafficChart').getContext('2d');
+    if (trafficChart) trafficChart.destroy();
+    const labels = trafficData.data.map(d => d.date);
+    const data = trafficData.data.map(d => (d.total_bytes / (1024**3)).toFixed(2));
+    trafficChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Трафик (GB)',
+                data,
+                borderColor: '#4e73df',
+                backgroundColor: 'rgba(78,115,223,0.1)',
+                tension: 0.3,
+                fill: true,
+                pointRadius: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+}
+
+function updateTopClientsChart(clients) {
+    const ctx = document.getElementById('topClientsChart').getContext('2d');
+    if (topClientsChart) topClientsChart.destroy();
+    const sorted = [...clients].sort((a, b) => (b.traffic_used_mb || 0) - (a.traffic_used_mb || 0)).slice(0, 5);
+    topClientsChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: sorted.map(c => c.name),
+            datasets: [{
+                label: 'Трафик (GB)',
+                data: sorted.map(c => ((c.traffic_used_mb || 0) / 1024).toFixed(2)),
+                backgroundColor: ['#4e73df','#1cc88a','#36b9cc','#f6c23e','#e74a3b']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } },
+            indexAxis: 'y'
+        }
+    });
+}
+
+function updateServersTable(servers) {
+    const tbody = document.querySelector('#server-status tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (!servers.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted ps-3">Нет серверов</td></tr>';
+        return;
+    }
+    for (const server of servers) {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td class="ps-3">${server.name}</td>
+            <td>${server.ip}</td>
+            <td><span class="badge bg-${server.status === 'online' ? 'success' : 'danger'}">${server.status}</span></td>
+            <td><a href="/servers/${server.id}/protocols" class="btn btn-sm btn-outline-secondary py-0">Просмотр</a></td>
+        `;
+    }
+}
+
+function updateClientsTable(clients) {
+    const tbody = document.querySelector('#recent-clients tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (!clients.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted ps-3">Нет клиентов</td></tr>';
+        return;
+    }
+    for (const client of clients) {
+        const row = tbody.insertRow();
+        const gb = ((client.traffic_used_mb || 0) / 1024).toFixed(2);
+        row.innerHTML = `
+            <td class="ps-3"><a href="/clients/${client.id}">${client.name}</a></td>
+            <td>${client.server_id ? 'Сервер #' + client.server_id : 'Группа'}</td>
+            <td>${gb} GB</td>
+            <td><span class="badge bg-${client.status === 'active' ? 'success' : 'secondary'}">${client.status}</span></td>
+        `;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadDashboardData);
+setInterval(loadDashboardData, 60000);
+</script>
+{% endblock %}

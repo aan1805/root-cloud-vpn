@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Добавление бэкенда для HAProxy сервера {{ server.name }}</h1>
+
+<form method="POST">
+    {{ form.hidden_tag() }}
+    
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control") }}
+            <small class="text-muted">Например: awg_backend</small>
+            {% if form.name.errors %}
+                <div class="text-danger">{{ form.name.errors[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.group_id.label(class="form-label") }}
+            {{ form.group_id(class="form-select") }}
+            {% if form.group_id.errors %}
+                <div class="text-danger">{{ form.group_id.errors[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.protocol_type.label(class="form-label") }}
+            {{ form.protocol_type(class="form-select") }}
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            {{ form.mode.label(class="form-label") }}
+            {{ form.mode(class="form-select") }}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.balance_algorithm.label(class="form-label") }}
+            {{ form.balance_algorithm(class="form-select") }}
+        </div>
+        <div class="col-md-4 mb-3">
+            {{ form.port.label(class="form-label") }}
+            {{ form.port(class="form-control") }}
+            <small class="text-muted">Порт, который будет слушать HAProxy</small>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Создать бэкенд</button>
+    <a href="{{ url_for('haproxy.view_server', server_id=server.id) }}" class="btn btn-secondary">Отмена</a>
+</form>
+{% endblock %}

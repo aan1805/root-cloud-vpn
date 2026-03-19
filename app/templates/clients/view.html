@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0 fw-bold">Клиент: {{ client.name }}</h4>
+</div>
+
+<div class="row g-3">
+    <!-- Main info -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Основная информация</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <tr><th class="ps-3 w-40">ID</th><td>{{ client.id }}</td></tr>
+                    <tr><th class="ps-3">Email</th><td>{{ client.email or '—' }}</td></tr>
+
+                    {% if client.group_id %}
+                        <tr><th class="ps-3">Тип</th><td>Групповой (HAProxy)</td></tr>
+                        <tr><th class="ps-3">Группа</th><td>{{ client.group.name }}</td></tr>
+                        <tr><th class="ps-3">Протокол</th><td>{{ client.protocol_type.upper() if client.protocol_type else '—' }}</td></tr>
+                    {% else %}
+                        <tr><th class="ps-3">Тип</th><td>Одиночный сервер</td></tr>
+                        <tr><th class="ps-3">Сервер</th><td>{{ client.server.name if client.server else '—' }} ({{ client.server.ip if client.server else '—' }})</td></tr>
+                        <tr><th class="ps-3">Протокол</th><td>{{ client.protocol.protocol_type.upper() if client.protocol else '—' }} (порт {{ client.protocol.port if client.protocol else '—' }})</td></tr>
+                    {% endif %}
+
+                    <tr><th class="ps-3">Лимит трафика</th><td>{% if client.traffic_limit_bytes > 0 %}{{ (client.traffic_limit_bytes / (1024**3)) | int }} ГБ{% else %}Безлимит{% endif %}</td></tr>
+                    <tr><th class="ps-3">Использовано</th><td>{{ (client.traffic_used_bytes / (1024**3)) | round(2) }} ГБ</td></tr>
+                    <tr><th class="ps-3">Срок действия</th><td>{% if client.expiry_date %}{{ client.expiry_date.strftime('%Y-%m-%d %H:%M') }}{% else %}Бессрочно{% endif %}</td></tr>
+                    <tr>
+                        <th class="ps-3">Статус</th>
+                        <td>
+                            {% if client.status == 'active' %}<span class="badge bg-success">Активен</span>
+                            {% elif client.status == 'blocked' %}<span class="badge bg-danger">Заблокирован</span>
+                            {% elif client.status == 'expired' %}<span class="badge bg-warning text-dark">Просрочен</span>
+                            {% elif client.status == 'pending' %}<span class="badge bg-info">Применяется...</span>
+                            {% elif client.status == 'error' %}<span class="badge bg-danger">Ошибка</span>
+                            {% else %}<span class="badge bg-secondary">{{ client.status }}</span>{% endif %}
+                        </td>
+                    </tr>
+                    <tr><th class="ps-3">Создан</th><td>{{ client.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+                </table>
+            </div>
+            <div class="card-footer bg-white border-0 d-flex gap-2 flex-wrap">
+                <a href="{{ url_for('clients.edit', id=client.id) }}" class="btn btn-sm btn-warning">
+                    <i class="bi bi-pencil"></i> Редактировать
+                </a>
+                <form action="{{ url_for('clients.apply_to_server', id=client.id) }}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-sm btn-primary" {% if client.status == 'pending' %}disabled{% endif %}>
+                        <i class="bi bi-play-circle"></i>
+                        {% if client.status == 'pending' %}Применяется...{% else %}Применить{% endif %}
+                    </button>
+                </form>
+                <form action="{{ url_for('clients.delete', id=client.id) }}" method="post" class="d-inline" onsubmit="return confirm('Удалить клиента?')">
+                    <button type="submit" class="btn btn-sm btn-danger">
+                        <i class="bi bi-trash"></i> Удалить
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keys / config -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Ключи и конфигурация</div>
+            <div class="card-body">
+                {% set proto = client.protocol_type or (client.protocol.protocol_type if client.protocol else None) %}
+
+                {% if proto == 'awg' %}
+                    <p class="mb-1"><strong>Публичный ключ клиента:</strong></p>
+                    <pre class="bg-light p-2 rounded small">{{ client.public_key or 'Не сгенерирован' }}</pre>
+                    {% if client.private_key_encrypted %}
+                        <p class="text-muted small mb-1"><i class="bi bi-lock"></i> Приватный ключ зашифрован в БД</p>
+                        <p class="mb-2"><strong>IP:</strong> {{ client.extra_params.get('assigned_ip', 'не назначен') }}</p>
+                    {% endif %}
+                    {% if not client.public_key %}
+                        <form action="{{ url_for('clients.generate_keys', id=client.id) }}" method="post">
+                            <button type="submit" class="btn btn-sm btn-secondary">Сгенерировать ключи</button>
+                        </form>
+                    {% else %}
+                        <a href="{{ url_for('clients.download_config', id=client.id) }}" class="btn btn-sm btn-info">
+                            <i class="bi bi-download"></i> Скачать конфиг
+                        </a>
+                    {% endif %}
+
+                {% elif proto == 'xray' %}
+                    <p class="mb-1"><strong>UUID:</strong></p>
+                    <pre class="bg-light p-2 rounded small">{{ client.extra_params.get('uuid', 'Не сгенерирован') }}</pre>
+                    <p><strong>Email:</strong> {{ client.extra_params.get('email', '—') }}</p>
+                    {% if client.extra_params.get('uuid') %}
+                        <a href="{{ url_for('clients.download_config', id=client.id) }}" class="btn btn-sm btn-info">
+                            <i class="bi bi-download"></i> Скачать конфиг
+                        </a>
+                    {% else %}
+                        <form action="{{ url_for('clients.generate_keys', id=client.id) }}" method="post">
+                            <button type="submit" class="btn btn-sm btn-secondary">Сгенерировать UUID</button>
+                        </form>
+                    {% endif %}
+
+                {% else %}
+                    <div class="alert alert-warning mb-0">Информация о ключах недоступна.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% set proto = client.protocol_type or (client.protocol.protocol_type if client.protocol else None) %}
+        {% if proto == 'awg' and client.public_key %}
+        <!-- QR Code card -->
+        <div class="card mt-3">
+            <div class="card-header bg-white border-0 fw-semibold">QR-код конфигурации</div>
+            <div class="card-body text-center">
+                <div id="qrcode" class="d-inline-block"></div>
+                <p class="text-muted small mt-2 mb-0">Сканируйте в приложении AmneziaWG</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Traffic history chart -->
+<div class="card mt-3">
+    <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">История трафика</span>
+        <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary active" id="btn7" onclick="loadTrafficChart(7)">7 дней</button>
+            <button class="btn btn-outline-secondary" id="btn30" onclick="loadTrafficChart(30)">30 дней</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="chart-container">
+            <canvas id="clientTrafficChart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% set proto = client.protocol_type or (client.protocol.protocol_type if client.protocol else None) %}
+{% if proto == 'awg' and client.public_key %}
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+(async function() {
+    try {
+        const resp = await fetch('{{ url_for("clients.config_text", id=client.id) }}');
+        if (!resp.ok) {
+            document.getElementById('qrcode').innerHTML = '<span class="text-danger small">Ошибка загрузки конфига</span>';
+            return;
+        }
+        const text = await resp.text();
+        const el = document.getElementById('qrcode');
+        try {
+            new QRCode(el, {
+                text: text,
+                width: 220,
+                height: 220,
+                correctLevel: QRCode.CorrectLevel.L
+            });
+        } catch(qrErr) {
+            el.innerHTML = '<span class="text-danger small">Конфиг слишком длинный для QR</span>';
+            console.error('QR generation error', qrErr);
+        }
+    } catch(e) {
+        console.error('QR fetch error', e);
+    }
+})();
+</script>
+{% endif %}
+<script>
+let clientTrafficChart = null;
+
+async function loadTrafficChart(days) {
+    document.getElementById('btn7').classList.toggle('active', days === 7);
+    document.getElementById('btn30').classList.toggle('active', days === 30);
+
+    try {
+        const resp = await apiFetch(`/api/v1/stats/traffic/client/{{ client.id }}?days=${days}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        const ctx = document.getElementById('clientTrafficChart').getContext('2d');
+        if (clientTrafficChart) clientTrafficChart.destroy();
+
+        clientTrafficChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.data.map(d => d.date),
+                datasets: [{
+                    label: 'Получено (MB)',
+                    data: data.data.map(d => ((d.bytes_received || 0) / (1024**2)).toFixed(1)),
+                    backgroundColor: 'rgba(78,115,223,0.7)'
+                }, {
+                    label: 'Отправлено (MB)',
+                    data: data.data.map(d => ((d.bytes_sent || 0) / (1024**2)).toFixed(1)),
+                    backgroundColor: 'rgba(28,200,138,0.7)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'top' } },
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'MB' } } }
+            }
+        });
+    } catch(e) {
+        console.error('Traffic chart error', e);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => loadTrafficChart(7));
+</script>
+{% endblock %}

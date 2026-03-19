@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>Клиенты</h1>
+    <a href="{{ url_for('clients.create') }}" class="btn btn-success">Новый клиент</a>
+</div>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Имя</th>
+            <th>Email</th>
+            <th>Сервер / Протокол</th>
+            <th>Лимит трафика</th>
+            <th>Срок действия</th>
+            <th>Статус</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for client in clients %}
+        <tr>
+            <td>{{ client.id }}</td>
+            <td>{{ client.name }}</td>
+            <td>{{ client.email or '-' }}</td>
+            <td>
+                {{ client.server.name }}<br>
+                <small class="text-muted">{{ client.protocol.protocol_type }}:{{ client.protocol.port }}</small>
+            </td>
+            <td>
+                {% if client.traffic_limit_bytes > 0 %}
+                    {{ (client.traffic_limit_bytes / (1024**3)) | int }} ГБ
+                {% else %}
+                    Безлимит
+                {% endif %}
+            </td>
+            <td>
+                {% if client.expiry_date %}
+                    {{ client.expiry_date.strftime('%Y-%m-%d') }}
+                {% else %}
+                    Бессрочно
+                {% endif %}
+            </td>
+            <td>
+                {% if client.status == 'active' %}
+                    <span class="badge bg-success">Активен</span>
+                {% elif client.status == 'blocked' %}
+                    <span class="badge bg-danger">Заблокирован</span>
+                {% elif client.status == 'expired' %}
+                    <span class="badge bg-warning">Просрочен</span>
+                {% elif client.status == 'pending' %}
+                    <span class="badge bg-info">Применяется...</span>
+                {% elif client.status == 'error' %}
+                    <span class="badge bg-danger">Ошибка установки</span>
+                {% else %}
+                    <span class="badge bg-secondary">{{ client.status }}</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="{{ url_for('clients.view', id=client.id) }}" class="btn btn-sm btn-info">👁️</a>
+                <form action="{{ url_for('clients.delete', id=client.id) }}" method="post" class="d-inline" onsubmit="return confirm('Удалить клиента?');">
+                    <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="8" class="text-center">Нет клиентов</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
