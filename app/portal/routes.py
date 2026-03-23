@@ -25,13 +25,28 @@ def _get_oauth_client():
     try:
         from authlib.integrations.flask_client import OAuth
         oauth = OAuth(current_app)
-        oauth.register(
-            'provider',
-            client_id=setting.client_id,
-            client_secret=decrypt_data(setting.client_secret_encrypted),
-            server_metadata_url=f"{setting.provider_url.rstrip('/')}/.well-known/openid-configuration",
-            client_kwargs={'scope': 'openid email profile'}
-        )
+
+        if setting.authorize_url and setting.token_url:
+            # Ручные endpoints — провайдер без discovery
+            kwargs = dict(
+                client_id=setting.client_id,
+                client_secret=decrypt_data(setting.client_secret_encrypted),
+                authorize_url=setting.authorize_url,
+                access_token_url=setting.token_url,
+                client_kwargs={'scope': 'openid email profile'},
+            )
+            if setting.userinfo_url:
+                kwargs['userinfo_endpoint'] = setting.userinfo_url
+        else:
+            # Стандартный OIDC с auto-discovery
+            kwargs = dict(
+                client_id=setting.client_id,
+                client_secret=decrypt_data(setting.client_secret_encrypted),
+                server_metadata_url=f"{setting.provider_url.rstrip('/')}/.well-known/openid-configuration",
+                client_kwargs={'scope': 'openid email profile'},
+            )
+
+        oauth.register('provider', **kwargs)
         return oauth, oauth.provider
     except Exception as e:
         current_app.logger.error(f"OAuth client init error: {e}")
@@ -123,7 +138,12 @@ def callback():
 
     try:
         token = provider.authorize_access_token()
-        userinfo = token.get('userinfo') or provider.userinfo()
+        # Для провайдеров без discovery userinfo не парсится автоматически из id_token
+        userinfo = token.get('userinfo')
+        if not userinfo and setting.userinfo_url:
+            userinfo = provider.userinfo(token=token)
+        if not userinfo:
+            userinfo = token  # fallback: попробуем взять claims прямо из токена
     except Exception as e:
         current_app.logger.error(f"OIDC callback error: {e}")
         return render_template('portal/not_configured.html',

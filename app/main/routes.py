@@ -53,6 +53,9 @@ def oidc_settings():
         provider_url = request.form.get('provider_url', '').strip()
         client_id = request.form.get('client_id', '').strip()
         client_secret = request.form.get('client_secret', '').strip()
+        authorize_url = request.form.get('authorize_url', '').strip() or None
+        token_url = request.form.get('token_url', '').strip() or None
+        userinfo_url = request.form.get('userinfo_url', '').strip() or None
         auto_group_id = request.form.get('auto_group_id') or None
         auto_server_id = request.form.get('auto_server_id') or None
         auto_protocol_type = request.form.get('auto_protocol_type') or None
@@ -72,6 +75,9 @@ def oidc_settings():
         setting.client_id = client_id
         if client_secret:
             setting.client_secret_encrypted = encrypt_data(client_secret)
+        setting.authorize_url = authorize_url
+        setting.token_url = token_url
+        setting.userinfo_url = userinfo_url
         setting.auto_group_id = int(auto_group_id) if auto_group_id else None
         setting.auto_server_id = int(auto_server_id) if auto_server_id else None
         setting.auto_protocol_type = auto_protocol_type

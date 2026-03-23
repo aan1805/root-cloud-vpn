@@ -16,7 +16,7 @@
                         <input type="url" name="provider_url" class="form-control"
                                value="{{ setting.provider_url if setting else '' }}"
                                placeholder="https://your-oidc-provider.example.com" required>
-                        <div class="form-text">Базовый URL OIDC провайдера (без .well-known/...)</div>
+                        <div class="form-text">Базовый URL провайдера (используется если не заполнены ручные endpoints ниже)</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Client ID <span class="text-danger">*</span></label>
@@ -27,6 +27,27 @@
                         <label class="form-label">Client Secret</label>
                         <input type="password" name="client_secret" class="form-control"
                                placeholder="{% if setting %}Оставьте пустым, чтобы не менять{% else %}Введите секрет{% endif %}">
+                    </div>
+
+                    <hr>
+                    <p class="fw-semibold mb-1">Ручные endpoints <span class="text-muted fw-normal small">(если провайдер не поддерживает .well-known/openid-configuration)</span></p>
+                    <div class="mb-3">
+                        <label class="form-label">Authorization URL</label>
+                        <input type="url" name="authorize_url" class="form-control"
+                               value="{{ setting.authorize_url if setting else '' }}"
+                               placeholder="https://provider.example.com/oauth/authorize">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Token URL</label>
+                        <input type="url" name="token_url" class="form-control"
+                               value="{{ setting.token_url if setting else '' }}"
+                               placeholder="https://provider.example.com/oauth/token">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">UserInfo URL</label>
+                        <input type="url" name="userinfo_url" class="form-control"
+                               value="{{ setting.userinfo_url if setting else '' }}"
+                               placeholder="https://provider.example.com/oauth/userinfo">
                     </div>
 
                     <hr>
@@ -77,7 +98,7 @@
                 <p class="mb-1 small text-muted">Зарегистрируйте этот URL в настройках вашего OIDC провайдера:</p>
                 <div class="input-group">
                     <input type="text" class="form-control form-control-sm font-monospace"
-                           id="callbackUrl" value="{{ request.host_url.rstrip('/') }}/portal/callback" readonly>
+                           id="callbackUrl" value="{{ request.host_url.rstrip('/') }}/callback" readonly>
                     <button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('callbackUrl').value)">
                         <i class="bi bi-clipboard"></i>
                     </button>
@@ -85,7 +106,7 @@
                 <hr>
                 <p class="small text-muted mb-0">
                     <strong>Портал пользователей:</strong><br>
-                    <a href="/portal/" target="_blank">{{ request.host_url.rstrip('/') }}/portal/</a>
+                    <a href="/" target="_blank">{{ request.host_url.rstrip('/') }}/</a>
                 </p>
             </div>
         </div>

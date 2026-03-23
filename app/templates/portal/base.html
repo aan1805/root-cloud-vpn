@@ -13,11 +13,11 @@
 </head>
 <body>
 <nav class="navbar portal-navbar navbar-dark px-3 mb-4">
-    <a class="navbar-brand" href="/portal/">
+    <a class="navbar-brand" href="/">
         <i class="bi bi-cloud-fill text-primary"></i> Root-Cloud Portal
     </a>
     {% if session.get('portal_user_id') %}
-    <a href="/portal/logout" class="btn btn-sm btn-outline-light">
+    <a href="{{ url_for('portal.logout') }}" class="btn btn-sm btn-outline-light">
         <i class="bi bi-box-arrow-right"></i> Выйти
     </a>
     {% endif %}

@@ -102,7 +102,7 @@ function toggleQR(clientId) {
 
     if (!qrGenerated[clientId] && !container.classList.contains('d-none')) {
         qrGenerated[clientId] = true;
-        fetch('/portal/client/' + clientId + '/config-text')
+        fetch('/client/' + clientId + '/config-text')
             .then(r => r.text())
             .then(text => {
                 new QRCode(document.getElementById('qrcode-' + clientId), {

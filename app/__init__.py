@@ -22,7 +22,7 @@ def create_app(config_class=Config):
     swagger = Swagger(app)
 
     # Настройка login_manager
-    login_manager.login_view = 'auth.login'
+    login_manager.login_view = 'auth.login'  # resolves to /admin/auth/login
     login_manager.login_message = 'Пожалуйста, войдите для доступа к этой странице.'
 
     # Регистрация blueprints
@@ -35,18 +35,25 @@ def create_app(config_class=Config):
     from app.api import bp as api_bp
     from app.main import bp as main_bp
     from app.portal import bp as portal_bp
-    app.register_blueprint(auth_bp, url_prefix='/auth')
-    app.register_blueprint(servers_bp)
-    app.register_blueprint(protocols_bp)
-    app.register_blueprint(clients_bp)
-    app.register_blueprint(haproxy_bp)
-    app.register_blueprint(groups_bp, url_prefix='/groups')
-    app.register_blueprint(api_bp)
-    app.register_blueprint(main_bp)
-    app.register_blueprint(portal_bp, url_prefix='/portal')
 
+    # Admin blueprints — все под /admin
+    app.register_blueprint(auth_bp, url_prefix='/admin/auth')
+    app.register_blueprint(servers_bp, url_prefix='/admin/servers')
+    app.register_blueprint(protocols_bp, url_prefix='/admin/servers/<int:server_id>/protocols')
+    app.register_blueprint(clients_bp, url_prefix='/admin/clients')
+    app.register_blueprint(haproxy_bp, url_prefix='/admin/haproxy')
+    app.register_blueprint(groups_bp, url_prefix='/admin/groups')
+    app.register_blueprint(main_bp, url_prefix='/admin')
+
+    # API остаётся без /admin — используется в JS admin-шаблонов
+    app.register_blueprint(api_bp)
+
+    # Портал — корневой URL
+    app.register_blueprint(portal_bp, url_prefix='/')
+
+    @app.route('/admin/')
+    @app.route('/admin')
     @login_required
-    @app.route('/')
     def index():
         return render_template('index.html')
 
