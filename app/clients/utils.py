@@ -360,41 +360,100 @@ def generate_amnezia_vpn_uri(client, address, port):
 
 
 def generate_amnezia_export_json(client, address, port):
-    """Генерирует JSON-экспорт для AmneziaVPN (для QR-кода).
+    """Генерирует JSON-экспорт для AmneziaVPN (для QR-кода / импорта).
 
-    Формат соответствует экспорту Amnezia-сервера:
-    {
-      "containers": [{"container": "amnezia-awg", "awg": {"last_config": "<INI>"}}],
-      "defaultContainer": "amnezia-awg",
-      "description": "...",
-      "dns1": "8.8.8.8",
-      "dns2": "8.8.4.4",
-      "hostName": "<server-ip>"
-    }
+    Формат соответствует нативному экспорту Amnezia-сервера:
+    - awg-объект содержит все AWG-параметры как строки + last_config (JSON-строка)
+    - last_config содержит полные данные подключения + поле config (WireGuard INI)
+    - В INI внутри last_config DNS задаётся через плейсхолдеры $PRIMARY_DNS/$SECONDARY_DNS
     """
     import json
     params, assigned_ip, private_key, psk = _get_awg_params(client)
-    ini = generate_awg_config(client, params, assigned_ip, private_key, psk, address, port)
+
+    jc   = str(params.get('jc',   5))
+    jmin = str(params.get('jmin', 10))
+    jmax = str(params.get('jmax', 50))
+    s1   = str(params.get('s1',   76))
+    s2   = str(params.get('s2',   17))
+    h1   = str(params.get('h1',   972258040))
+    h2   = str(params.get('h2',   1405819692))
+    h3   = str(params.get('h3',   1069365787))
+    h4   = str(params.get('h4',   1451939155))
+    mtu  = str(params.get('mtu',  1376))
+    server_pub_key = params.get('server_public_key', '')
+    client_pub_key = client.public_key or ''
+
+    # WireGuard INI внутри last_config — DNS через плейсхолдеры, адрес /32
+    ini_lines = [
+        "[Interface]",
+        f"Address = {assigned_ip}/32",
+        "DNS = $PRIMARY_DNS, $SECONDARY_DNS",
+        f"PrivateKey = {private_key}",
+        f"Jc = {jc}",
+        f"Jmin = {jmin}",
+        f"Jmax = {jmax}",
+        f"S1 = {s1}",
+        f"S2 = {s2}",
+        f"H1 = {h1}",
+        f"H2 = {h2}",
+        f"H3 = {h3}",
+        f"H4 = {h4}",
+        "",
+        "[Peer]",
+        f"PublicKey = {server_pub_key}",
+    ]
+    if psk:
+        ini_lines.append(f"PresharedKey = {psk}")
+    ini_lines += [
+        "AllowedIPs = 0.0.0.0/0, ::/0",
+        f"Endpoint = {address}:{port}",
+        "PersistentKeepalive = 25",
+        "",
+    ]
+    ini_config = "\n".join(ini_lines)
+
+    # JSON-объект last_config (будет сериализован в строку)
+    last_config_obj = {
+        "H1": h1, "H2": h2, "H3": h3, "H4": h4,
+        "Jc": jc, "Jmax": jmax, "Jmin": jmin,
+        "S1": s1, "S2": s2,
+        "allowed_ips": ["0.0.0.0/0", "::/0"],
+        "clientId": client_pub_key,
+        "client_ip": assigned_ip,
+        "client_priv_key": private_key,
+        "client_pub_key": client_pub_key,
+        "config": ini_config,
+        "hostName": str(address),
+        "mtu": mtu,
+        "persistent_keep_alive": "25",
+        "port": int(port),
+        "psk_key": psk or "",
+        "server_pub_key": server_pub_key,
+    }
+
+    awg_obj = {
+        "H1": h1, "H2": h2, "H3": h3, "H4": h4,
+        "Jc": jc, "Jmax": jmax, "Jmin": jmin,
+        "S1": s1, "S2": s2,
+        "last_config": json.dumps(last_config_obj, indent=4, ensure_ascii=False) + "\n",
+        "port": str(port),
+        "transport_proto": "udp",
+    }
+
     export = {
-        "containers": [
-            {
-                "container": "amnezia-awg",
-                "awg": {
-                    "last_config": ini,
-                }
-            }
-        ],
+        "containers": [{"container": "amnezia-awg", "awg": awg_obj}],
         "defaultContainer": "amnezia-awg",
         "description": client.name or "AmneziaVPN",
-        "dns1": "8.8.8.8",
-        "dns2": "8.8.4.4",
+        "dns1": "1.1.1.1",
+        "dns2": "1.0.0.1",
         "hostName": str(address),
+        "nameOverriddenByUser": True,
     }
     return encode_config(export)
 
 def encode_config(config):
     """Encodes a JSON configuration into a vpn:// prefixed string."""
-    # Use indent=4 to preserve indentation
+    # Use indent=4 to preserve indentation,
     json_str = json.dumps(config, indent=4).encode()
 
     # Compress data using zlib
