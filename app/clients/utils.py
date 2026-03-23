@@ -1,6 +1,5 @@
 import base64
 import json
-import subprocess
 import time
 import uuid
 import re
@@ -11,19 +10,19 @@ from app.servers.ssh import execute_ssh_command
 
 
 def generate_wg_keys():
-    """Генерирует пару ключей WireGuard локально"""
-    try:
-        # Генерируем приватный ключ
-        private_key = subprocess.check_output(['wg', 'genkey']).decode().strip()
-        # Генерируем публичный ключ из приватного
-        proc = subprocess.Popen(['wg', 'pubkey'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        public_key, _ = proc.communicate(input=private_key.encode())
-        public_key = public_key.decode().strip()
-        return private_key, public_key
-    except Exception as e:
-        # fallback: если wg не установлен, используем встроенную генерацию (например, через cryptography)
-        # Для простоты пока вызовем ошибку
-        raise RuntimeError(f"WireGuard tools not available: {e}")
+    """Генерирует пару ключей WireGuard (X25519) через библиотеку cryptography."""
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
+    import base64
+
+    priv = X25519PrivateKey.generate()
+    private_b64 = base64.b64encode(
+        priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    ).decode()
+    public_b64 = base64.b64encode(
+        priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    ).decode()
+    return private_b64, public_b64
 
 
 def generate_xray_keys():
