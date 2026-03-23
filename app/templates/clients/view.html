@@ -140,7 +140,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 {% set proto = client.protocol_type or (client.protocol.protocol_type if client.protocol else None) %}
 {% if proto == 'awg' and client.public_key %}
-<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script>
 (async function() {
     try {
@@ -152,12 +152,9 @@
         const text = await resp.text();
         const el = document.getElementById('qrcode');
         try {
-            new QRCode(el, {
-                text: text,
-                width: 220,
-                height: 220,
-                correctLevel: QRCode.CorrectLevel.L
-            });
+            const canvas = document.createElement('canvas');
+            el.appendChild(canvas);
+            QRCode.toCanvas(canvas, text, { errorCorrectionLevel: 'L', width: 256, margin: 2 });
         } catch(qrErr) {
             el.innerHTML = '<span class="text-danger small">Конфиг слишком длинный для QR</span>';
             console.error('QR generation error', qrErr);

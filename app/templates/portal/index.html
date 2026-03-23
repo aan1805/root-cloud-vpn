@@ -126,7 +126,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script>
 const qrGenerated = {};
 
@@ -138,16 +138,26 @@ function toggleQR(clientId) {
     if (!qrGenerated[clientId] && !container.classList.contains('d-none')) {
         qrGenerated[clientId] = true;
         fetch('/client/' + clientId + '/config-text')
-            .then(r => r.text())
+            .then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.text();
+            })
             .then(text => {
-                new QRCode(document.getElementById('qrcode-' + clientId), {
-                    text: text,
-                    width: 220,
-                    height: 220,
-                    correctLevel: QRCode.CorrectLevel.L
+                const canvas = document.createElement('canvas');
+                document.getElementById('qrcode-' + clientId).appendChild(canvas);
+                QRCode.toCanvas(canvas, text, {
+                    errorCorrectionLevel: 'L',
+                    width: 256,
+                    margin: 2
+                }, function(err) {
+                    if (err) console.error('QR render error', err);
                 });
             })
-            .catch(e => console.error('QR error', e));
+            .catch(e => {
+                console.error('QR error', e);
+                document.getElementById('qrcode-' + clientId).innerHTML =
+                    '<p class="text-danger small">Ошибка генерации QR</p>';
+            });
     }
 }
 
