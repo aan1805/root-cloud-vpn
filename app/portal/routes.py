@@ -33,6 +33,7 @@ def _get_oauth_client():
                 client_secret=decrypt_data(setting.client_secret_encrypted),
                 authorize_url=setting.authorize_url,
                 access_token_url=setting.token_url,
+                token_endpoint_auth_method='client_secret_post',
                 client_kwargs={'scope': 'openid email profile'},
             )
             if setting.userinfo_url:
@@ -43,6 +44,7 @@ def _get_oauth_client():
                 client_id=setting.client_id,
                 client_secret=decrypt_data(setting.client_secret_encrypted),
                 server_metadata_url=f"{setting.provider_url.rstrip('/')}/.well-known/openid-configuration",
+                token_endpoint_auth_method='client_secret_post',
                 client_kwargs={'scope': 'openid email profile'},
             )
 
