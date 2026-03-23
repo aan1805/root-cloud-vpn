@@ -1,6 +1,7 @@
 from flasgger import Swagger
 from flask import Flask, redirect, url_for, render_template
 from flask_login import login_required
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.celery_app import celery, init_celery
 from app.config import Config
@@ -9,6 +10,7 @@ from app.extensions import db, migrate, login_manager, limiter
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # Инициализация расширений
     db.init_app(app)
