@@ -361,9 +361,15 @@ def generate_amnezia_vpn_uri(client, address, port):
 def generate_amnezia_export_json(client, address, port):
     """Генерирует JSON-экспорт для AmneziaVPN (для QR-кода).
 
-    AmneziaVPN сканирует QR, ожидая JSON-формат вида:
-    {"containers": [{"container": "amnezia-awg", "awg": {"last_config": "..."}}],
-     "defaultContainer": "amnezia-awg"}
+    Формат соответствует экспорту Amnezia-сервера:
+    {
+      "containers": [{"container": "amnezia-awg", "awg": {"last_config": "<INI>"}}],
+      "defaultContainer": "amnezia-awg",
+      "description": "...",
+      "dns1": "8.8.8.8",
+      "dns2": "8.8.4.4",
+      "hostName": "<server-ip>"
+    }
     """
     import json
     params, assigned_ip, private_key, psk = _get_awg_params(client)
@@ -373,20 +379,15 @@ def generate_amnezia_export_json(client, address, port):
             {
                 "container": "amnezia-awg",
                 "awg": {
-                    "H1": str(params.get('h1', 1855549004)),
-                    "H2": str(params.get('h2', 2882373428)),
-                    "H3": str(params.get('h3', 3625691520)),
-                    "H4": str(params.get('h4', 3868285620)),
-                    "Jc": str(params.get('jc', 5)),
-                    "Jmax": str(params.get('jmax', 50)),
-                    "Jmin": str(params.get('jmin', 30)),
-                    "S1": str(params.get('s1', 220)),
-                    "S2": str(params.get('s2', 230)),
                     "last_config": ini,
                 }
             }
         ],
-        "defaultContainer": "amnezia-awg"
+        "defaultContainer": "amnezia-awg",
+        "description": client.name or "AmneziaVPN",
+        "dns1": "8.8.8.8",
+        "dns2": "8.8.4.4",
+        "hostName": str(address),
     }
     return json.dumps(export, ensure_ascii=False)
 
