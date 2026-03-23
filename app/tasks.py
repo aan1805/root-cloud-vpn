@@ -15,6 +15,8 @@ def collect_all_stats(self):
     servers = Server.query.filter_by(status='online').all()
     for server in servers:
         collect_server_stats.delay(server.id)
+        collect_detailed_wg_stats.delay(server.id)
+        collect_server_resources.delay(server.id)
     return f"Запущен сбор статистики для {len(servers)} серверов"
 
 

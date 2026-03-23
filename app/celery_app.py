@@ -1,4 +1,5 @@
 from celery import Celery, Task
+from celery.schedules import crontab
 from app.config import Config
 
 # Глобальная переменная для хранения экземпляра Flask, чтобы избежать конфликтов имен в классе Task
@@ -27,6 +28,26 @@ celery = Celery(
     include=['app.tasks'],
     task_cls=FlaskTask
 )
+
+celery.conf.beat_schedule = {
+    'collect-stats-every-hour': {
+        'task': 'app.tasks.collect_all_stats',
+        'schedule': crontab(minute=0),
+    },
+    'check-limits-every-15-minutes': {
+        'task': 'app.tasks.check_all_limits',
+        'schedule': crontab(minute='*/15'),
+    },
+    'check-servers-status-every-5-minutes': {
+        'task': 'app.tasks.check_all_servers_status',
+        'schedule': crontab(minute='*/5'),
+    },
+    'cleanup-session-tokens-daily': {
+        'task': 'app.tasks.cleanup_session_tokens',
+        'schedule': crontab(hour=3, minute=0),
+    },
+}
+
 
 def init_celery(app):
     """Обновление конфига и сохранение ссылки на приложение"""

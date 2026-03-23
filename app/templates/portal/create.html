@@ -1,0 +1,140 @@
+{% extends "portal/base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-4">
+    <a href="{{ url_for('portal.index') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i>
+    </a>
+    <h4 class="mb-0 fw-bold">Новое подключение</h4>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
+
+{% if not servers and not groups %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Нет доступных серверов с установленными протоколами. Обратитесь к администратору.
+</div>
+{% else %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Выберите сервер и протокол</div>
+            <div class="card-body">
+                <form method="post" id="createForm">
+                    <input type="hidden" name="target_type" id="target_type" value="">
+                    <input type="hidden" name="target_id" id="target_id" value="">
+                    <input type="hidden" name="protocol_type" id="protocol_type_hidden" value="">
+
+                    {% if groups %}
+                    <div class="mb-4">
+                        <label class="form-label fw-semibold">Группы серверов</label>
+                        <div class="d-flex flex-column gap-2">
+                            {% for g in groups %}
+                            <div class="border rounded p-3" style="cursor:pointer"
+                                 onclick="selectTarget('group', {{ g.obj.id }}, this)">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="bi bi-diagram-3 text-primary me-2"></i>
+                                        <strong>{{ g.obj.name }}</strong>
+                                        {% if g.obj.description %}
+                                        <small class="text-muted ms-1">— {{ g.obj.description }}</small>
+                                        {% endif %}
+                                    </div>
+                                    <div class="d-flex gap-1 proto-buttons" data-target-type="group" data-target-id="{{ g.obj.id }}">
+                                        {% for proto in g.protocols %}
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-primary proto-btn"
+                                                data-proto="{{ proto }}"
+                                                onclick="event.stopPropagation(); selectProto('group', {{ g.obj.id }}, '{{ proto }}', this)">
+                                            {{ proto.upper() }}
+                                        </button>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if servers %}
+                    <div class="mb-4">
+                        <label class="form-label fw-semibold">Отдельные серверы</label>
+                        <div class="d-flex flex-column gap-2">
+                            {% for s in servers %}
+                            <div class="border rounded p-3" style="cursor:pointer"
+                                 onclick="selectTarget('server', {{ s.obj.id }}, this)">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="bi bi-server text-success me-2"></i>
+                                        <strong>{{ s.obj.name }}</strong>
+                                        <small class="text-muted ms-1">{{ s.obj.ip }}</small>
+                                    </div>
+                                    <div class="d-flex gap-1">
+                                        {% for proto in s.protocols %}
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-success proto-btn"
+                                                data-proto="{{ proto }}"
+                                                onclick="event.stopPropagation(); selectProto('server', {{ s.obj.id }}, '{{ proto }}', this)">
+                                            {{ proto.upper() }}
+                                        </button>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div id="submitArea" class="d-none mt-3 pt-3 border-top">
+                        <p class="text-muted small mb-2">
+                            Выбрано: <strong id="selectionLabel">—</strong>
+                        </p>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-plus-lg"></i> Создать подключение
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let selectedType = null, selectedId = null, selectedProto = null;
+
+function selectTarget(type, id, el) {
+    // просто подсветка без выбора протокола
+}
+
+function selectProto(type, id, proto, btn) {
+    // Снимаем выделение со всех кнопок
+    document.querySelectorAll('.proto-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    selectedType = type;
+    selectedId = id;
+    selectedProto = proto;
+
+    document.getElementById('target_type').value = type;
+    document.getElementById('target_id').value = id;
+    document.getElementById('protocol_type_hidden').value = proto;
+
+    const typeLabel = type === 'group' ? 'Группа' : 'Сервер';
+    document.getElementById('selectionLabel').textContent =
+        `${typeLabel} ID ${id} · ${proto.toUpperCase()}`;
+    document.getElementById('submitArea').classList.remove('d-none');
+}
+</script>
+{% endblock %}

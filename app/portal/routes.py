@@ -1,6 +1,6 @@
-from flask import render_template, redirect, url_for, session, request, current_app, Response, abort
+from flask import render_template, redirect, url_for, session, request, current_app, Response, abort, flash
 from app.portal import bp
-from app.models import OIDCSetting, OIDCUser, Client, ServerProtocol, Server
+from app.models import OIDCSetting, OIDCUser, Client, ServerProtocol, Server, ServerGroup
 from app.extensions import db
 from app.utils.crypto import decrypt_data
 from app.clients.utils import generate_keys_for_client, generate_client_config
@@ -92,26 +92,134 @@ def _auto_provision_client(user, setting):
     return client
 
 
+def _get_portal_user():
+    user = OIDCUser.query.get(session.get('portal_user_id'))
+    if not user:
+        session.pop('portal_user_id', None)
+    return user
+
+
+def _available_options():
+    """Возвращает серверы и группы с установленными протоколами."""
+    servers = []
+    for s in Server.query.filter_by(status='online').all():
+        protos = [p.protocol_type for p in s.protocols if p.status == 'installed']
+        if protos:
+            servers.append({'obj': s, 'protocols': protos})
+
+    groups = []
+    for g in ServerGroup.query.all():
+        protos = set()
+        for s in g.servers:
+            for p in s.protocols:
+                if p.status == 'installed':
+                    protos.add(p.protocol_type)
+        if protos:
+            groups.append({'obj': g, 'protocols': sorted(protos)})
+
+    return servers, groups
+
+
 @bp.route('/')
 @portal_login_required
 def index():
-    user = OIDCUser.query.get(session['portal_user_id'])
+    user = _get_portal_user()
     if not user:
-        session.pop('portal_user_id', None)
         return redirect(url_for('portal.login'))
 
-    setting = OIDCSetting.get()
-    if not setting:
+    if not OIDCSetting.get():
         return render_template('portal/not_configured.html')
 
     clients = user.clients.all()
-
-    # Auto-provision if no clients yet
-    if not clients and setting.auto_protocol_type:
-        _auto_provision_client(user, setting)
-        clients = user.clients.all()
-
     return render_template('portal/index.html', user=user, clients=clients)
+
+
+@bp.route('/create', methods=['GET', 'POST'])
+@portal_login_required
+def create_client():
+    user = _get_portal_user()
+    if not user:
+        return redirect(url_for('portal.login'))
+
+    servers, groups = _available_options()
+
+    if request.method == 'POST':
+        target_type = request.form.get('target_type')  # 'server' or 'group'
+        target_id = request.form.get('target_id', type=int)
+        protocol_type = request.form.get('protocol_type')
+
+        if not target_type or not target_id or not protocol_type:
+            flash('Заполните все поля.', 'danger')
+            return render_template('portal/create.html', user=user,
+                                   servers=servers, groups=groups)
+
+        client = Client(
+            email=user.email,
+            oidc_user_id=user.id,
+            status='pending',
+        )
+
+        if target_type == 'server':
+            server = Server.query.get_or_404(target_id)
+            protocol = ServerProtocol.query.filter_by(
+                server_id=server.id,
+                protocol_type=protocol_type,
+                status='installed'
+            ).first()
+            if not protocol:
+                flash('Протокол не найден на этом сервере.', 'danger')
+                return render_template('portal/create.html', user=user,
+                                       servers=servers, groups=groups)
+            client.name = f"{user.name or user.email or 'user'}_{server.name}_{protocol_type}"
+            client.server_id = server.id
+            client.protocol_id = protocol.id
+            client.protocol_type = protocol_type
+
+        elif target_type == 'group':
+            group = ServerGroup.query.get_or_404(target_id)
+            client.name = f"{user.name or user.email or 'user'}_{group.name}_{protocol_type}"
+            client.group_id = group.id
+            client.protocol_type = protocol_type
+
+        else:
+            abort(400)
+
+        db.session.add(client)
+        db.session.commit()
+
+        try:
+            generate_keys_for_client(client)
+            apply_client_task.delay(client.id)
+        except Exception as e:
+            current_app.logger.error(f"Portal create client error: {e}")
+            flash(f'Ошибка создания конфига: {e}', 'danger')
+            db.session.delete(client)
+            db.session.commit()
+            return render_template('portal/create.html', user=user,
+                                   servers=servers, groups=groups)
+
+        flash('Конфиг создаётся, обычно это занимает несколько секунд.', 'success')
+        return redirect(url_for('portal.index'))
+
+    return render_template('portal/create.html', user=user,
+                           servers=servers, groups=groups)
+
+
+@bp.route('/client/<int:client_id>/delete', methods=['POST'])
+@portal_login_required
+def delete_client(client_id):
+    user = _get_portal_user()
+    if not user:
+        return redirect(url_for('portal.login'))
+
+    client = Client.query.get_or_404(client_id)
+    if client.oidc_user_id != user.id:
+        abort(403)
+
+    from app.tasks import remove_client_task
+    remove_client_task.delay(client.id)
+    flash('Конфиг удаляется.', 'info')
+    return redirect(url_for('portal.index'))
 
 
 @bp.route('/login')
@@ -185,11 +293,6 @@ def callback():
     db.session.commit()
 
     session['portal_user_id'] = user.id
-
-    # Auto-provision for new users
-    if is_new and setting.auto_protocol_type:
-        _auto_provision_client(user, setting)
-
     return redirect(url_for('portal.index'))
 
 
