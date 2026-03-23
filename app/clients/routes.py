@@ -236,12 +236,22 @@ def download_config(id):
 @bp.route('/<int:id>/config-text')
 @login_required
 def config_text(id):
-    client = Client.query.get_or_404(id)
-    config = generate_client_config(client)
-    if not config:
-        abort(404)
     from flask import Response
-    return Response(config, mimetype='text/plain')
+    from app.clients.utils import generate_amnezia_export_json
+    client = Client.query.get_or_404(id)
+    proto_type = client.protocol_type or (client.protocol.protocol_type if client.protocol else None)
+    if proto_type == 'awg':
+        config = generate_client_config(client)
+        if not config:
+            abort(404)
+        connection_address = client.server.ip if client.server else None
+        connection_port = client.protocol.port if client.protocol else None
+        text = generate_amnezia_export_json(client, connection_address, connection_port)
+    else:
+        text = generate_client_config(client)
+    if not text:
+        abort(404)
+    return Response(text, mimetype='text/plain')
 
 
 @bp.route('/api/servers/<int:server_id>/protocols')

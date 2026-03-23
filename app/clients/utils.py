@@ -334,13 +334,13 @@ def generate_client_config(client):
 
     return None
 
-def generate_amnezia_vpn_uri(client, address, port):
-    """Генерирует конфиг для AmneziaWG"""
+def _get_awg_params(client):
+    """Возвращает (params, assigned_ip, private_key, psk) для AWG клиента."""
     params = {}
     if client.protocol:
         params = client.protocol.config_params
     elif client.group:
-         for srv in client.group.servers:
+        for srv in client.group.servers:
             proto = next((p for p in srv.protocols if p.protocol_type == 'awg' and p.status == 'installed'), None)
             if proto:
                 params = proto.config_params
@@ -349,8 +349,46 @@ def generate_amnezia_vpn_uri(client, address, port):
     assigned_ip = client.extra_params.get('assigned_ip')
     private_key = decrypt_data(client.private_key_encrypted) if client.private_key_encrypted else ""
     psk = decrypt_data(client.extra_params.get('psk')) if client.extra_params.get('psk') else None
+    return params, assigned_ip, private_key, psk
 
+
+def generate_amnezia_vpn_uri(client, address, port):
+    """Генерирует конфиг для AmneziaWG в формате INI."""
+    params, assigned_ip, private_key, psk = _get_awg_params(client)
     return generate_awg_config(client, params, assigned_ip, private_key, psk, address, port)
+
+
+def generate_amnezia_export_json(client, address, port):
+    """Генерирует JSON-экспорт для AmneziaVPN (для QR-кода).
+
+    AmneziaVPN сканирует QR, ожидая JSON-формат вида:
+    {"containers": [{"container": "amnezia-awg", "awg": {"last_config": "..."}}],
+     "defaultContainer": "amnezia-awg"}
+    """
+    import json
+    params, assigned_ip, private_key, psk = _get_awg_params(client)
+    ini = generate_awg_config(client, params, assigned_ip, private_key, psk, address, port)
+    export = {
+        "containers": [
+            {
+                "container": "amnezia-awg",
+                "awg": {
+                    "H1": str(params.get('h1', 1855549004)),
+                    "H2": str(params.get('h2', 2882373428)),
+                    "H3": str(params.get('h3', 3625691520)),
+                    "H4": str(params.get('h4', 3868285620)),
+                    "Jc": str(params.get('jc', 5)),
+                    "Jmax": str(params.get('jmax', 50)),
+                    "Jmin": str(params.get('jmin', 30)),
+                    "S1": str(params.get('s1', 220)),
+                    "S2": str(params.get('s2', 230)),
+                    "last_config": ini,
+                }
+            }
+        ],
+        "defaultContainer": "amnezia-awg"
+    }
+    return json.dumps(export, ensure_ascii=False)
 
 def generate_awg_config(client, params, assigned_ip, private_key, psk="", address=None, port=None):
     """Генерирует конфиг AmneziaWG 2.0 в формате INI"""
