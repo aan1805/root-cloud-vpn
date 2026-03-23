@@ -5,6 +5,7 @@ from app.servers.ssh import execute_ssh_command
 from app.utils.crypto import decrypt_data
 from datetime import datetime, date, timedelta
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -574,3 +575,111 @@ def restart_protocol_task(self, protocol_id):
     else:
         logger.error(f"Failed to restart protocol {protocol.protocol_type}: {stderr}")
         return f"Error: {stderr}"
+
+
+@celery.task(bind=True)
+def cleanup_deleted_oidc_users(self):
+    """
+    Ночная задача: проверяет каждого OIDC-пользователя через провайдер
+    и удаляет тех, кого больше нет.
+
+    Использует Client Credentials grant для получения сервисного токена,
+    затем Keycloak Admin REST API: GET /admin/realms/{realm}/users/{sub}
+
+    Требование: сервисный аккаунт (client_id) должен иметь роль
+    'view-users' в realm-management Keycloak.
+    """
+    import requests
+    from app.models import OIDCSetting, OIDCUser
+
+    setting = OIDCSetting.get()
+    if not setting:
+        return "OIDC не настроен, пропускаем"
+
+    client_secret = decrypt_data(setting.client_secret_encrypted)
+
+    # --- 1. Определяем token_endpoint ---
+    token_url = setting.token_url
+    if not token_url:
+        try:
+            discovery = requests.get(
+                f"{setting.provider_url.rstrip('/')}/.well-known/openid-configuration",
+                timeout=10
+            )
+            discovery.raise_for_status()
+            token_url = discovery.json().get('token_endpoint')
+        except Exception as e:
+            logger.error(f"cleanup_oidc_users: discovery failed: {e}")
+            return f"Не удалось получить token_endpoint: {e}"
+
+    if not token_url:
+        return "token_endpoint не найден в конфигурации провайдера"
+
+    # --- 2. Получаем client_credentials токен ---
+    try:
+        resp = requests.post(token_url, data={
+            'grant_type': 'client_credentials',
+            'client_id': setting.client_id,
+            'client_secret': client_secret,
+        }, timeout=10)
+        resp.raise_for_status()
+        access_token = resp.json().get('access_token')
+    except Exception as e:
+        logger.error(f"cleanup_oidc_users: token request failed: {e}")
+        return f"Не удалось получить токен провайдера: {e}"
+
+    if not access_token:
+        return "access_token отсутствует в ответе провайдера"
+
+    # --- 3. Строим base URL Keycloak Admin API ---
+    # provider_url вида: https://sso.example.com/realms/myrealm
+    # Admin API:          https://sso.example.com/admin/realms/myrealm
+    provider_url = setting.provider_url.rstrip('/')
+    match = re.search(r'^(https?://[^/]+)/realms/(.+)$', provider_url)
+    if not match:
+        return (
+            f"provider_url '{provider_url}' не соответствует Keycloak-формату "
+            f"https://host/realms/{{realm}} — проверка невозможна"
+        )
+    admin_base = f"{match.group(1)}/admin/realms/{match.group(2)}"
+
+    # --- 4. Проверяем каждого пользователя ---
+    users = OIDCUser.query.all()
+    deleted, skipped = 0, 0
+
+    for user in users:
+        try:
+            r = requests.get(
+                f"{admin_base}/users/{user.sub}",
+                headers={'Authorization': f'Bearer {access_token}'},
+                timeout=10
+            )
+
+            if r.status_code == 404:
+                # Пользователь удалён из провайдера — отвязываем его клиентов и удаляем
+                Client.query.filter_by(oidc_user_id=user.id).update({'oidc_user_id': None})
+                db.session.delete(user)
+                db.session.commit()
+                deleted += 1
+                logger.info(f"cleanup_oidc_users: удалён {user.email or user.sub} (не найден в провайдере)")
+
+            elif r.status_code == 200:
+                pass  # пользователь существует
+
+            elif r.status_code == 403:
+                logger.warning(
+                    "cleanup_oidc_users: 403 Forbidden — сервисному аккаунту "
+                    "нужна роль 'view-users' в realm-management Keycloak"
+                )
+                skipped += 1
+                break  # дальше проверять бессмысленно
+
+            else:
+                logger.warning(f"cleanup_oidc_users: статус {r.status_code} для sub={user.sub}, пропускаем")
+                skipped += 1
+
+        except Exception as e:
+            logger.error(f"cleanup_oidc_users: ошибка проверки sub={user.sub}: {e}")
+            skipped += 1
+
+    return f"Готово: удалено={deleted}, пропущено={skipped}, всего={len(users)}"

@@ -15,4 +15,8 @@ celery.conf.beat_schedule = {
         'task': 'app.tasks.check_all_servers_status',
         'schedule': crontab(minute='*/5'),  # каждые 5 минут
     },
+    'cleanup-deleted-oidc-users-nightly': {
+        'task': 'app.tasks.cleanup_deleted_oidc_users',
+        'schedule': crontab(hour=3, minute=0),  # каждую ночь в 3:00
+    },
 }
