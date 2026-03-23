@@ -252,6 +252,22 @@ class HaproxyManager:
             if exit_code != 0:
                 errors.append(f"MASQUERADE →{dst}: {err}")
 
+            # --- FORWARD: разрешаем форвардинг пакетов через прокси к AWG и обратно ---
+            # После DNAT пакет идёт через FORWARD chain (не INPUT).
+            # Если политика FORWARD=DROP — данные дропаются даже при успешном handshake.
+            self._execute_ssh(
+                f"sudo iptables -D FORWARD -p udp -d {srv_ip} --dport {srv_port} "
+                f"-j ACCEPT 2>/dev/null || true"
+            )
+            self._execute_ssh(
+                f"sudo iptables -I FORWARD 1 -p udp -d {srv_ip} --dport {srv_port} -j ACCEPT"
+            )
+            # Разрешаем ответные пакеты (ESTABLISHED/RELATED) через conntrack
+            self._execute_ssh(
+                "sudo iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT "
+                "2>/dev/null || sudo iptables -I FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+            )
+
         if errors:
             return False, "; ".join(errors)
         return True, "iptables DNAT+MASQUERADE правила обновлены"
