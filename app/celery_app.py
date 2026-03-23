@@ -23,8 +23,8 @@ class FlaskTask(Task):
 # Создаем экземпляр Celery с указанием нашего базового класса
 celery = Celery(
     'rootcloud',
-    broker=Config.CELERY_BROKER_URL,
-    backend=Config.CELERY_RESULT_BACKEND,
+    broker=Config.broker_url,
+    backend=Config.result_backend,
     include=['app.tasks'],
     task_cls=FlaskTask
 )
@@ -50,7 +50,6 @@ celery.conf.beat_schedule = {
 
 
 def init_celery(app):
-    """Обновление конфига и сохранение ссылки на приложение"""
+    """Сохранение ссылки на Flask приложение для контекста задач"""
     global _flask_app
     _flask_app = app
-    celery.conf.update(app.config)

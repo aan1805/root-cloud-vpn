@@ -10,9 +10,9 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'postgresql://amnezia:amnezia@localhost/amnezia_farm')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # Настройки для Celery
-    CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-    CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+    # Настройки для Celery (новый формат Celery 5.x)
+    broker_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+    result_backend = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
     # Ограничение попыток входа (flask-limiter)
     RATELIMIT_ENABLED = False
