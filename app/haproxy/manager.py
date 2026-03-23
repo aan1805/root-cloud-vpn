@@ -189,17 +189,30 @@ class HaproxyManager:
 
     def update_nginx_stream_config(self, awg_backends):
         """
-        Управляет iptables DNAT-правилами для AWG (UDP) бэкендов.
+        Управляет iptables DNAT+MASQUERADE правилами для AWG (UDP) бэкендов.
 
         nginx stream НЕ используется для AWG: при Jc>0 nginx создаёт отдельную
         upstream-сессию для каждого junk-пакета, из-за чего handshake-ответы
         не доходят до клиента. iptables DNAT работает прозрачно на уровне ядра.
 
-        Для каждого бэкенда с одним upstream-сервером добавляем DNAT-правило:
-          PREROUTING udp --dport <backend.port> → <srv_ip>:<srv_port>
+        При раздельных машинах (прокси ≠ AWG) без MASQUERADE AWG-сервер отвечает
+        клиенту напрямую, минуя прокси — клиент дропает пакет (ждёт src прокси).
+        MASQUERADE заменяет src на IP прокси → AWG отвечает прокси → conntrack
+        восстанавливает оригинальный src для клиента.
+
+        Для каждого бэкенда:
+          PREROUTING udp --dport <listen_port> → DNAT <srv_ip>:<srv_port>
+          POSTROUTING -d <srv_ip> --dport <srv_port> → MASQUERADE
         """
         if not awg_backends:
             return True, "Нет AWG бэкендов"
+
+        # Включаем ip_forward (необходимо для forwarding между интерфейсами)
+        self._execute_ssh("sudo sysctl -w net.ipv4.ip_forward=1")
+        self._execute_ssh(
+            "grep -q 'net.ipv4.ip_forward=1' /etc/sysctl.conf || "
+            "echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf"
+        )
 
         errors = []
         for backend in awg_backends:
@@ -208,10 +221,12 @@ class HaproxyManager:
 
             # Поддерживаем только один upstream (WireGuard — stateful, нельзя балансировать)
             srv = backend.servers_json[0]
-            dst = f"{srv['ip']}:{srv['port']}"
+            srv_ip = srv['ip']
+            srv_port = srv['port']
+            dst = f"{srv_ip}:{srv_port}"
             listen_port = backend.port
 
-            # Удаляем старое правило если есть, добавляем новое
+            # --- DNAT: входящий трафик на прокси-порт → AWG-сервер ---
             self._execute_ssh(
                 f"sudo iptables -t nat -D PREROUTING -p udp --dport {listen_port} "
                 f"-j DNAT --to-destination {dst} 2>/dev/null || true"
@@ -222,10 +237,24 @@ class HaproxyManager:
             )
             if exit_code != 0:
                 errors.append(f"DNAT {listen_port}→{dst}: {err}")
+                continue
+
+            # --- MASQUERADE: заменяем src на IP прокси чтобы AWG отвечал обратно на прокси ---
+            # Без этого при раздельных машинах AWG отвечает напрямую клиенту (асимметричный маршрут)
+            self._execute_ssh(
+                f"sudo iptables -t nat -D POSTROUTING -p udp -d {srv_ip} --dport {srv_port} "
+                f"-j MASQUERADE 2>/dev/null || true"
+            )
+            exit_code, _, err = self._execute_ssh(
+                f"sudo iptables -t nat -A POSTROUTING -p udp -d {srv_ip} --dport {srv_port} "
+                f"-j MASQUERADE"
+            )
+            if exit_code != 0:
+                errors.append(f"MASQUERADE →{dst}: {err}")
 
         if errors:
             return False, "; ".join(errors)
-        return True, "iptables DNAT правила обновлены"
+        return True, "iptables DNAT+MASQUERADE правила обновлены"
 
     # -------------------------------------------------------------------------
     # HAProxy backend / frontend конфиг (только TCP протоколы: xray, openvpn)

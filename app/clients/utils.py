@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 import re
+import zlib
 
 from app import db
 from app.utils.crypto import encrypt_data, decrypt_data
@@ -389,7 +390,23 @@ def generate_amnezia_export_json(client, address, port):
         "dns2": "8.8.4.4",
         "hostName": str(address),
     }
-    return json.dumps(export, ensure_ascii=False)
+    return encode_config(export)
+
+def encode_config(config):
+    """Encodes a JSON configuration into a vpn:// prefixed string."""
+    # Use indent=4 to preserve indentation
+    json_str = json.dumps(config, indent=4).encode()
+
+    # Compress data using zlib
+    compressed_data = zlib.compress(json_str)
+
+    # Add a 4-byte header with the original data length in big-endian format
+    original_data_len = len(json_str)
+    header = original_data_len.to_bytes(4, byteorder='big')
+
+    # Combine header and compressed data, then encode with Base64
+    encoded_data = base64.urlsafe_b64encode(header + compressed_data).decode().rstrip("=")
+    return f"vpn://{encoded_data}"
 
 def generate_awg_config(client, params, assigned_ip, private_key, psk="", address=None, port=None):
     """Генерирует конфиг AmneziaWG 2.0 в формате INI"""
