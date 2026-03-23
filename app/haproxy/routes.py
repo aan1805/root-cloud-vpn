@@ -211,6 +211,19 @@ def reload_haproxy(server_id):
     return redirect(url_for('haproxy.view_server', server_id=server_id))
 
 
+@bp.route('/servers/<int:server_id>/delete', methods=['POST'])
+@login_required
+def delete_server(server_id):
+    """Удаляет HAProxy сервер и все его бэкенды"""
+    server = HaproxyServer.query.get_or_404(server_id)
+    # Удаляем все бэкенды сервера, затем сам сервер
+    HaproxyBackend.query.filter_by(haproxy_server_id=server_id).delete()
+    db.session.delete(server)
+    db.session.commit()
+    flash(f'HAProxy сервер «{server.name}» удалён.', 'success')
+    return redirect(url_for('haproxy.index'))
+
+
 @bp.route('/backends/<int:backend_id>/delete', methods=['POST'])
 @login_required
 def delete_backend(backend_id):

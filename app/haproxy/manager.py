@@ -2,6 +2,7 @@ import paramiko
 import time
 from io import StringIO
 from app.utils.crypto import decrypt_data
+from app.servers.ssh import parse_private_key
 
 NGINX_STREAM_CONF = '/etc/nginx/stream.d/rootcloud.conf'
 
@@ -24,11 +25,7 @@ class HaproxyManager:
     def _execute_ssh(self, command):
         """Выполняет SSH команду на сервере"""
         try:
-            key_file = StringIO(self.ssh_key)
-            if self.passphrase:
-                pkey = paramiko.RSAKey.from_private_key(key_file, password=self.passphrase)
-            else:
-                pkey = paramiko.RSAKey.from_private_key(key_file)
+            pkey = parse_private_key(self.ssh_key, self.passphrase)
 
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -47,11 +44,7 @@ class HaproxyManager:
     def _sftp_write(self, content, remote_path):
         """Записывает content в remote_path через SFTP (безопасно для любого содержимого)"""
         try:
-            key_file = StringIO(self.ssh_key)
-            if self.passphrase:
-                pkey = paramiko.RSAKey.from_private_key(key_file, password=self.passphrase)
-            else:
-                pkey = paramiko.RSAKey.from_private_key(key_file)
+            pkey = parse_private_key(self.ssh_key, self.passphrase)
 
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -172,12 +165,7 @@ class HaproxyManager:
 
         # Читаем текущий nginx.conf через SFTP
         try:
-            key_file = StringIO(self.ssh_key)
-            pkey = (
-                paramiko.RSAKey.from_private_key(key_file, password=self.passphrase)
-                if self.passphrase
-                else paramiko.RSAKey.from_private_key(key_file)
-            )
+            pkey = parse_private_key(self.ssh_key, self.passphrase)
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh_client.connect(self.host, port=self.ssh_port, username=self.username, pkey=pkey, timeout=30)
