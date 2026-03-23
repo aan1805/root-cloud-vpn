@@ -2,7 +2,7 @@ from flask import render_template, redirect, url_for, session, request, current_
 from app.portal import bp
 from app.models import OIDCSetting, OIDCUser, Client, ServerProtocol, Server, ServerGroup
 from app.extensions import db
-from app.utils.crypto import decrypt_data
+from app.utils.crypto import decrypt_data, encrypt_data
 from app.clients.utils import generate_keys_for_client, generate_client_config, generate_amnezia_export_json
 from app.tasks import apply_client_task
 from datetime import datetime
@@ -290,6 +290,11 @@ def callback():
         user.name = userinfo.get('name') or userinfo.get('preferred_username') or user.name
 
     user.last_login = datetime.utcnow()
+
+    refresh_token = token.get('refresh_token')
+    if refresh_token:
+        user.refresh_token_encrypted = encrypt_data(refresh_token)
+
     db.session.commit()
 
     session['portal_user_id'] = user.id

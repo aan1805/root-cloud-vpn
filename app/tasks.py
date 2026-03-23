@@ -581,16 +581,19 @@ def restart_protocol_task(self, protocol_id):
 def cleanup_deleted_oidc_users(self):
     """
     Ночная задача: проверяет каждого OIDC-пользователя через провайдер
-    и удаляет тех, кого больше нет.
+    и удаляет тех, кого больше нет или кто заблокирован.
 
-    Использует Client Credentials grant для получения сервисного токена,
-    затем Keycloak Admin REST API: GET /admin/realms/{realm}/users/{sub}
-
-    Требование: сервисный аккаунт (client_id) должен иметь роль
-    'view-users' в realm-management Keycloak.
+    Алгоритм для каждого юзера:
+    1. Берём сохранённый refresh_token и обновляем его через /oauth/token
+    2. Вызываем /oauth/userinfo с новым access_token
+    3. invalid_grant при refresh  → удаляем (токен отозван / юзер удалён из провайдера)
+       invalid_token при userinfo → удаляем (юзер удалён из Users в провайдере)
+       block: true в userinfo     → блокируем клиентов юзера
+    4. Сохраняем новый refresh_token для следующего запуска
     """
     import requests
     from app.models import OIDCSetting, OIDCUser
+    from app.utils.crypto import encrypt_data
 
     setting = OIDCSetting.get()
     if not setting:
@@ -598,88 +601,112 @@ def cleanup_deleted_oidc_users(self):
 
     client_secret = decrypt_data(setting.client_secret_encrypted)
 
-    # --- 1. Определяем token_endpoint ---
+    # Определяем token_endpoint и userinfo_endpoint
     token_url = setting.token_url
-    if not token_url:
+    userinfo_url = setting.userinfo_url
+    if not token_url or not userinfo_url:
         try:
-            discovery = requests.get(
+            disc = requests.get(
                 f"{setting.provider_url.rstrip('/')}/.well-known/openid-configuration",
                 timeout=10
             )
-            discovery.raise_for_status()
-            token_url = discovery.json().get('token_endpoint')
+            disc.raise_for_status()
+            data = disc.json()
+            token_url = token_url or data.get('token_endpoint')
+            userinfo_url = userinfo_url or data.get('userinfo_endpoint')
         except Exception as e:
             logger.error(f"cleanup_oidc_users: discovery failed: {e}")
-            return f"Не удалось получить token_endpoint: {e}"
+            return f"Не удалось получить endpoints: {e}"
 
-    if not token_url:
-        return "token_endpoint не найден в конфигурации провайдера"
+    if not token_url or not userinfo_url:
+        return "token_endpoint или userinfo_endpoint не найдены"
 
-    # --- 2. Получаем client_credentials токен ---
-    try:
-        resp = requests.post(token_url, data={
-            'grant_type': 'client_credentials',
-            'client_id': setting.client_id,
-            'client_secret': client_secret,
-        }, timeout=10)
-        resp.raise_for_status()
-        access_token = resp.json().get('access_token')
-    except Exception as e:
-        logger.error(f"cleanup_oidc_users: token request failed: {e}")
-        return f"Не удалось получить токен провайдера: {e}"
-
-    if not access_token:
-        return "access_token отсутствует в ответе провайдера"
-
-    # --- 3. Строим base URL Keycloak Admin API ---
-    # provider_url вида: https://sso.example.com/realms/myrealm
-    # Admin API:          https://sso.example.com/admin/realms/myrealm
-    provider_url = setting.provider_url.rstrip('/')
-    match = re.search(r'^(https?://[^/]+)/realms/(.+)$', provider_url)
-    if not match:
-        return (
-            f"provider_url '{provider_url}' не соответствует Keycloak-формату "
-            f"https://host/realms/{{realm}} — проверка невозможна"
-        )
-    admin_base = f"{match.group(1)}/admin/realms/{match.group(2)}"
-
-    # --- 4. Проверяем каждого пользователя ---
     users = OIDCUser.query.all()
-    deleted, skipped = 0, 0
+    deleted, blocked, skipped = 0, 0, 0
 
     for user in users:
+        if not user.refresh_token_encrypted:
+            # refresh_token не сохранён — юзер заходил до внедрения этой фичи,
+            # пропускаем (удалим при следующем его логине или вручную)
+            skipped += 1
+            continue
+
         try:
-            r = requests.get(
-                f"{admin_base}/users/{user.sub}",
-                headers={'Authorization': f'Bearer {access_token}'},
-                timeout=10
-            )
-
-            if r.status_code == 404:
-                # Пользователь удалён из провайдера — отвязываем его клиентов и удаляем
-                Client.query.filter_by(oidc_user_id=user.id).update({'oidc_user_id': None})
-                db.session.delete(user)
-                db.session.commit()
-                deleted += 1
-                logger.info(f"cleanup_oidc_users: удалён {user.email or user.sub} (не найден в провайдере)")
-
-            elif r.status_code == 200:
-                pass  # пользователь существует
-
-            elif r.status_code == 403:
-                logger.warning(
-                    "cleanup_oidc_users: 403 Forbidden — сервисному аккаунту "
-                    "нужна роль 'view-users' в realm-management Keycloak"
-                )
-                skipped += 1
-                break  # дальше проверять бессмысленно
-
-            else:
-                logger.warning(f"cleanup_oidc_users: статус {r.status_code} для sub={user.sub}, пропускаем")
-                skipped += 1
-
+            refresh_token = decrypt_data(user.refresh_token_encrypted)
         except Exception as e:
-            logger.error(f"cleanup_oidc_users: ошибка проверки sub={user.sub}: {e}")
+            logger.error(f"cleanup_oidc_users: не удалось расшифровать токен юзера {user.id}: {e}")
+            skipped += 1
+            continue
+
+        # --- Шаг 1: обновляем токен ---
+        try:
+            r = requests.post(token_url, data={
+                'grant_type': 'refresh_token',
+                'client_id': setting.client_id,
+                'client_secret': client_secret,
+                'refresh_token': refresh_token,
+            }, timeout=10)
+        except Exception as e:
+            logger.error(f"cleanup_oidc_users: ошибка запроса токена для {user.sub}: {e}")
+            skipped += 1
+            continue
+
+        if r.status_code != 200 or r.json().get('error') == 'invalid_grant':
+            # Refresh token недействителен — удаляем юзера
+            Client.query.filter_by(oidc_user_id=user.id).update({'oidc_user_id': None})
+            db.session.delete(user)
+            db.session.commit()
+            deleted += 1
+            logger.info(f"cleanup_oidc_users: удалён {user.email or user.sub} (invalid_grant)")
+            continue
+
+        token_data = r.json()
+        access_token = token_data.get('access_token')
+        new_refresh_token = token_data.get('refresh_token')
+
+        if not access_token:
+            skipped += 1
+            continue
+
+        # --- Шаг 2: проверяем userinfo ---
+        try:
+            ui = requests.get(userinfo_url, headers={
+                'Authorization': f'Bearer {access_token}'
+            }, timeout=10)
+        except Exception as e:
+            logger.error(f"cleanup_oidc_users: ошибка userinfo для {user.sub}: {e}")
+            skipped += 1
+            continue
+
+        if ui.status_code == 401:
+            # Юзер удалён из базы провайдера
+            Client.query.filter_by(oidc_user_id=user.id).update({'oidc_user_id': None})
+            db.session.delete(user)
+            db.session.commit()
+            deleted += 1
+            logger.info(f"cleanup_oidc_users: удалён {user.email or user.sub} (invalid_token от userinfo)")
+            continue
+
+        if ui.status_code == 200:
+            info = ui.json()
+
+            if info.get('block'):
+                # Юзер заблокирован на провайдере — блокируем его клиентов
+                Client.query.filter_by(oidc_user_id=user.id).update({'status': 'blocked'})
+                db.session.commit()
+                blocked += 1
+                logger.info(f"cleanup_oidc_users: заблокированы клиенты {user.email or user.sub} (block=true)")
+            else:
+                # Всё в порядке — обновляем имя/email и сохраняем новый refresh_token
+                user.email = info.get('email', user.email)
+                user.name = info.get('name', user.name)
+
+            if new_refresh_token:
+                user.refresh_token_encrypted = encrypt_data(new_refresh_token)
+            db.session.commit()
+
+        else:
+            logger.warning(f"cleanup_oidc_users: userinfo вернул {ui.status_code} для {user.sub}")
             skipped += 1
 
-    return f"Готово: удалено={deleted}, пропущено={skipped}, всего={len(users)}"
+    return f"Готово: удалено={deleted}, заблокировано={blocked}, пропущено={skipped}, всего={len(users)}"

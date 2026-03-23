@@ -192,6 +192,7 @@ class OIDCUser(db.Model):
     name = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
+    refresh_token_encrypted = db.Column(db.Text, nullable=True)
 
     clients = db.relationship('Client', backref='oidc_user', lazy='dynamic',
                               foreign_keys='Client.oidc_user_id')
