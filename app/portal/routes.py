@@ -326,11 +326,13 @@ def download_config(client_id):
         flash('Не удалось сформировать конфиг — сервер недоступен или не настроен.', 'danger')
         return redirect(url_for('portal.index'))
 
+    from urllib.parse import quote
     filename = f"{client.name}.conf"
+    filename_encoded = quote(filename, safe='')
     return Response(
         config,
         mimetype='text/plain',
-        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{filename_encoded}"}
     )
 
 
