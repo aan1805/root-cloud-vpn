@@ -465,7 +465,7 @@ def encode_config(config):
 
     # Combine header and compressed data, then encode with Base64
     encoded_data = base64.urlsafe_b64encode(header + compressed_data).decode().rstrip("=")
-    return f"vpn://{encoded_data}"
+    return f"{encoded_data}"
 
 def generate_awg_config(client, params, assigned_ip, private_key, psk="", address=None, port=None):
     """Генерирует конфиг AmneziaWG 2.0 в формате INI"""
