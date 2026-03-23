@@ -313,15 +313,24 @@ def download_config(client_id):
     if client.oidc_user_id != user.id:
         abort(403)
 
-    config = generate_client_config(client)
+    try:
+        config = generate_client_config(client)
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"download_config error for client {client_id}: {e}\n{traceback.format_exc()}")
+        flash('Ошибка генерации конфига. Проверьте логи.', 'danger')
+        return redirect(url_for('portal.index'))
+
     if not config:
-        abort(404)
+        current_app.logger.warning(f"download_config: empty config for client {client_id}")
+        flash('Не удалось сформировать конфиг — сервер недоступен или не настроен.', 'danger')
+        return redirect(url_for('portal.index'))
 
     filename = f"{client.name}.conf"
     return Response(
         config,
         mimetype='text/plain',
-        headers={'Content-Disposition': f'attachment; filename={filename}'}
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
 
 
@@ -337,8 +346,14 @@ def config_text(client_id):
     if client.oidc_user_id != user.id:
         abort(403)
 
-    config = generate_client_config(client)
+    try:
+        config = generate_client_config(client)
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"config_text error for client {client_id}: {e}\n{traceback.format_exc()}")
+        return Response('ERROR', mimetype='text/plain', status=500)
+
     if not config:
-        abort(404)
+        return Response('', mimetype='text/plain', status=404)
 
     return Response(config, mimetype='text/plain')

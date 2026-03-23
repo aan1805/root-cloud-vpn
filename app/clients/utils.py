@@ -260,6 +260,7 @@ def remove_client_from_server(client):
 
 def generate_client_config(client):
     """Генерирует конфигурационный файл для клиента"""
+    from flask import current_app
     # Определяем адрес подключения (Endpoint)
     connection_address = client.server.ip if client.server else None
     connection_port = client.protocol.port if client.protocol else None
@@ -279,8 +280,27 @@ def generate_client_config(client):
         if backend:
             connection_address = backend.haproxy_server.ip
             connection_port = backend.port
+        else:
+            # Нет HAProxy — используем IP/порт первого подходящего сервера группы напрямую
+            if client.group and client.group.servers:
+                for srv in client.group.servers:
+                    proto = next(
+                        (p for p in srv.protocols
+                         if p.protocol_type == client.protocol_type and p.status == 'installed'),
+                        None
+                    )
+                    if proto:
+                        connection_address = srv.ip
+                        connection_port = proto.port
+                        break
+
+    current_app.logger.info(
+        f"generate_client_config: client={client.id} proto={client.protocol_type} "
+        f"addr={connection_address} port={connection_port}"
+    )
 
     if not connection_address:
+        current_app.logger.warning(f"generate_client_config: no endpoint found for client {client.id}")
         return None
 
     proto_type = client.protocol_type or (client.protocol.protocol_type if client.protocol else None)
