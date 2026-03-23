@@ -1,7 +1,7 @@
 from flask import render_template, redirect, url_for, flash, request
 from flask_login import login_required
 from app.main import bp
-from app.models import ApiToken, OIDCSetting, ServerGroup, Server
+from app.models import ApiToken, OIDCSetting, ServerGroup, Server, OIDCUser, Client
 from app.extensions import db
 from app.utils.crypto import encrypt_data
 from datetime import datetime
@@ -86,3 +86,25 @@ def oidc_settings():
         return redirect(url_for('main.oidc_settings'))
 
     return render_template('settings/oidc.html', setting=setting, groups=groups, servers=servers)
+
+
+@bp.route('/settings/oidc-users')
+@login_required
+def oidc_users():
+    users = OIDCUser.query.order_by(OIDCUser.last_login.desc().nullslast()).all()
+    return render_template('settings/oidc_users.html', users=users)
+
+
+@bp.route('/settings/oidc-users/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_oidc_user(id):
+    user = OIDCUser.query.get_or_404(id)
+    delete_clients = request.form.get('delete_clients') == '1'
+    if delete_clients:
+        Client.query.filter_by(oidc_user_id=id).delete()
+    else:
+        Client.query.filter_by(oidc_user_id=id).update({'oidc_user_id': None})
+    db.session.delete(user)
+    db.session.commit()
+    flash(f'Пользователь {user.email or user.sub} удалён.', 'success')
+    return redirect(url_for('main.oidc_users'))

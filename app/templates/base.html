@@ -63,6 +63,12 @@
                     <i class="bi bi-shield-lock"></i> OIDC / Портал
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'main.oidc_users' %}active{% endif %}"
+                   href="{{ url_for('main.oidc_users') }}">
+                    <i class="bi bi-people"></i> Пользователи портала
+                </a>
+            </li>
         </ul>
     </nav>
     {% endif %}

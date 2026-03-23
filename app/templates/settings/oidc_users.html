@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1><i class="bi bi-people-fill"></i> Пользователи портала</h1>
+    <span class="text-muted">{{ users|length }} пользователей</span>
+</div>
+
+{% if not users %}
+<div class="alert alert-info">Нет авторизованных пользователей.</div>
+{% else %}
+
+{% for user in users %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            <strong><i class="bi bi-person-circle"></i> {{ user.name or user.email or user.sub }}</strong>
+            {% if user.email and user.name %}
+                <span class="text-muted ms-2">{{ user.email }}</span>
+            {% endif %}
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <small class="text-muted">
+                Регистрация: {{ user.created_at.strftime('%Y-%m-%d %H:%M') }}<br>
+                Последний вход:
+                {% if user.last_login %}
+                    {{ user.last_login.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}
+                    —
+                {% endif %}
+            </small>
+            <button class="btn btn-sm btn-outline-danger"
+                    data-bs-toggle="modal"
+                    data-bs-target="#deleteModal{{ user.id }}">
+                <i class="bi bi-trash"></i>
+            </button>
+        </div>
+    </div>
+
+    {% set clients = user.clients.all() %}
+    {% if clients %}
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3">Клиент</th>
+                    <th>Протокол</th>
+                    <th>Группа / Сервер</th>
+                    <th>Трафик</th>
+                    <th>Срок</th>
+                    <th>Статус</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for client in clients %}
+                <tr>
+                    <td class="ps-3">
+                        <a href="{{ url_for('clients.view', id=client.id) }}">{{ client.name }}</a>
+                        {% if client.email %}<br><small class="text-muted">{{ client.email }}</small>{% endif %}
+                    </td>
+                    <td>
+                        <span class="badge bg-secondary">{{ (client.protocol_type or (client.protocol.protocol_type if client.protocol else '—')).upper() }}</span>
+                    </td>
+                    <td>
+                        {% if client.group %}
+                            <i class="bi bi-diagram-3"></i> {{ client.group.name }}
+                        {% elif client.server %}
+                            <i class="bi bi-server"></i> {{ client.server.name }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set used_gb = (client.traffic_used_bytes / (1024**3)) | round(2) %}
+                        {% if client.traffic_limit_bytes > 0 %}
+                            {% set limit_gb = (client.traffic_limit_bytes / (1024**3)) | round(1) %}
+                            {{ used_gb }} / {{ limit_gb }} ГБ
+                        {% else %}
+                            {{ used_gb }} ГБ
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if client.expiry_date %}
+                            {{ client.expiry_date.strftime('%Y-%m-%d') }}
+                        {% else %}
+                            Бессрочно
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if client.status == 'active' %}
+                            <span class="badge bg-success">Активен</span>
+                        {% elif client.status == 'blocked' %}
+                            <span class="badge bg-danger">Заблокирован</span>
+                        {% elif client.status == 'expired' %}
+                            <span class="badge bg-warning text-dark">Просрочен</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ client.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('clients.view', id=client.id) }}" class="btn btn-sm btn-outline-info">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body text-muted py-2">
+        <small>Нет созданных клиентов</small>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Delete Modal -->
+<div class="modal fade" id="deleteModal{{ user.id }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Удалить пользователя</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Удалить <strong>{{ user.name or user.email or user.sub }}</strong>?</p>
+                {% if user.clients.count() > 0 %}
+                <div class="alert alert-warning mb-0">
+                    У пользователя {{ user.clients.count() }} клиент(ов).
+                    Выберите что с ними делать:
+                </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer gap-2">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                {% if user.clients.count() > 0 %}
+                <form action="{{ url_for('main.delete_oidc_user', id=user.id) }}" method="post" class="d-inline">
+                    <input type="hidden" name="delete_clients" value="0">
+                    <button type="submit" class="btn btn-warning">Удалить пользователя, оставить клиентов</button>
+                </form>
+                <form action="{{ url_for('main.delete_oidc_user', id=user.id) }}" method="post" class="d-inline"
+                      onsubmit="return confirm('Удалить пользователя и всех его клиентов?')">
+                    <input type="hidden" name="delete_clients" value="1">
+                    <button type="submit" class="btn btn-danger">Удалить вместе с клиентами</button>
+                </form>
+                {% else %}
+                <form action="{{ url_for('main.delete_oidc_user', id=user.id) }}" method="post">
+                    <input type="hidden" name="delete_clients" value="0">
+                    <button type="submit" class="btn btn-danger">Удалить</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}
