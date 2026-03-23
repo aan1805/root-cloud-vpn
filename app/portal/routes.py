@@ -138,16 +138,28 @@ def callback():
 
     try:
         token = provider.authorize_access_token()
+        current_app.logger.info(f"OIDC token received, keys: {list(token.keys())}")
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"OIDC token exchange error: {e}\n{traceback.format_exc()}")
+        return render_template('portal/not_configured.html',
+                               error=f"Ошибка обмена токена: {e}")
+
+    try:
         # Для провайдеров без discovery userinfo не парсится автоматически из id_token
         userinfo = token.get('userinfo')
         if not userinfo and setting.userinfo_url:
             userinfo = provider.userinfo(token=token)
+            current_app.logger.info(f"OIDC userinfo fetched: {userinfo}")
         if not userinfo:
-            userinfo = token  # fallback: попробуем взять claims прямо из токена
+            # fallback: взять claims прямо из токена
+            userinfo = dict(token)
+            current_app.logger.info(f"OIDC userinfo fallback from token: {list(userinfo.keys())}")
     except Exception as e:
-        current_app.logger.error(f"OIDC callback error: {e}")
+        import traceback
+        current_app.logger.error(f"OIDC userinfo error: {e}\n{traceback.format_exc()}")
         return render_template('portal/not_configured.html',
-                               error="Ошибка авторизации. Попробуйте ещё раз.")
+                               error=f"Ошибка получения данных пользователя: {e}")
 
     sub = userinfo.get('sub')
     if not sub:
