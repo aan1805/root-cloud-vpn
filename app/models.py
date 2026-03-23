@@ -173,7 +173,7 @@ class TrafficStats(db.Model):
     __tablename__ = 'traffic_stats'
 
     id = db.Column(db.Integer, primary_key=True)
-    client_id = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False)
+    client_id = db.Column(db.Integer, db.ForeignKey('clients.id', ondelete='CASCADE'), nullable=False)
     date = db.Column(db.Date, nullable=False)
     bytes_sent = db.Column(db.BigInteger, default=0)  # исходящий трафик (tx)
     bytes_received = db.Column(db.BigInteger, default=0)  # входящий трафик (rx)
