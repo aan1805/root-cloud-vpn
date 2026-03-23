@@ -179,7 +179,7 @@ class TrafficStats(db.Model):
     bytes_received = db.Column(db.BigInteger, default=0)  # входящий трафик (rx)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    client = db.relationship('Client', backref=db.backref('stats', lazy='dynamic'))
+    client = db.relationship('Client', backref=db.backref('stats', lazy='dynamic', cascade='all, delete-orphan'))
 
     __table_args__ = (db.UniqueConstraint('client_id', 'date', name='unique_client_date'),)
 
