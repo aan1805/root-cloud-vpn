@@ -90,10 +90,10 @@
                                 <td>{{ server.name }}</td>
                                 <td class="text-muted">{{ server.ip }}</td>
                                 <td>
-                                    <input type="number" name="server_{{ server.id }}_vps_id"
+                                    <input type="text" name="server_{{ server.id }}_vps_id"
                                            class="form-control form-control-sm"
                                            value="{{ server.fornex_vps_id or '' }}"
-                                           placeholder="ID">
+                                           placeholder="напр. 34-294241">
                                 </td>
                             </tr>
                             {% endfor %}
@@ -121,10 +121,10 @@
                                 <td>{{ hap.name }}</td>
                                 <td class="text-muted">{{ hap.ip }}</td>
                                 <td>
-                                    <input type="number" name="haproxy_{{ hap.id }}_vps_id"
+                                    <input type="text" name="haproxy_{{ hap.id }}_vps_id"
                                            class="form-control form-control-sm"
                                            value="{{ hap.fornex_vps_id or '' }}"
-                                           placeholder="ID">
+                                           placeholder="напр. 34-294241">
                                 </td>
                             </tr>
                             {% endfor %}

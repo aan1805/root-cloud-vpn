@@ -352,54 +352,58 @@ def collect_server_resources(self, server_id):
         pass
 
 
-def _parse_fornex_stat(data):
+def _fetch_fornex_field(base_url, order_id, field, headers):
     """
-    Парсит ответ Fornex API /api/vds/v1.0/{id}/stat/.
-    Поддерживает форматы: {cpu, mem, net: {in, out}} и плоский {cpu_load, memory_usage, net_in, net_out}.
-    Возвращает (cpu_pct, mem_pct, net_in_bytes, net_out_bytes) — значения могут быть None.
+    Запрашивает одно поле статистики: GET {base_url}/vps/{order_id}/stats/{field}/
+    Возвращает float/int или None при ошибке.
+
+    Ответ API может быть числом, строкой или объектом {"value": ...}.
     """
-    cpu = data.get('cpu') or data.get('cpu_load') or data.get('cpu_usage')
-    mem = data.get('mem') or data.get('memory') or data.get('memory_usage') or data.get('ram')
+    url = f"{base_url}/vps/{order_id}/stats/{field}/"
+    try:
+        resp = http_requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        # Если вернули объект — берём поле value
+        if isinstance(data, dict):
+            val = data.get('value') or data.get(field) or data.get('data')
+        else:
+            val = data
+        return float(val) if val is not None else None
+    except Exception:
+        return None
 
-    net = data.get('net') or {}
-    if isinstance(net, dict):
-        net_in = net.get('in') or net.get('rx')
-        net_out = net.get('out') or net.get('tx')
-    else:
-        net_in = None
-        net_out = None
 
-    # Плоский формат
+def _collect_fornex_for(base_url, order_id, headers):
+    """
+    Собирает cpu, ram, net_rx, net_tx для одного order_id.
+    Возвращает dict с ключами cpu, mem, net_in, net_out (могут быть None).
+    """
+    # Поля, которые пробуем для каждой метрики (по приоритету)
+    cpu = _fetch_fornex_field(base_url, order_id, 'cpu', headers)
+
+    mem = _fetch_fornex_field(base_url, order_id, 'ram', headers)
+    if mem is None:
+        mem = _fetch_fornex_field(base_url, order_id, 'mem', headers)
+
+    net_in = _fetch_fornex_field(base_url, order_id, 'net_rx', headers)
     if net_in is None:
-        net_in = data.get('net_in') or data.get('network_in') or data.get('rx_bytes')
+        net_in = _fetch_fornex_field(base_url, order_id, 'net_in', headers)
+
+    net_out = _fetch_fornex_field(base_url, order_id, 'net_tx', headers)
     if net_out is None:
-        net_out = data.get('net_out') or data.get('network_out') or data.get('tx_bytes')
+        net_out = _fetch_fornex_field(base_url, order_id, 'net_out', headers)
 
-    try:
-        cpu = float(cpu) if cpu is not None else None
-    except (TypeError, ValueError):
-        cpu = None
-    try:
-        mem = float(mem) if mem is not None else None
-    except (TypeError, ValueError):
-        mem = None
-    try:
-        net_in = int(net_in) if net_in is not None else None
-    except (TypeError, ValueError):
-        net_in = None
-    try:
-        net_out = int(net_out) if net_out is not None else None
-    except (TypeError, ValueError):
-        net_out = None
-
-    return cpu, mem, net_in, net_out
+    return dict(cpu=cpu, mem=mem, net_in=net_in, net_out=net_out)
 
 
 @celery.task(bind=True)
 def collect_fornex_stats(self):
     """
     Собирает статистику серверов через Fornex API.
-    Endpoint: GET {base_url}vds/v1.0/{vps_id}/stat/
+    Endpoint: GET {base_url}/vps/{order_id}/stats/{field}/
+    Примеры полей: cpu, ram, net_rx, net_tx
     Auth: Authorization: Api-Key {key}
 
     Обновляет ServerStats для VPN-серверов и HaproxyStats для балансировщиков.
@@ -416,7 +420,7 @@ def collect_fornex_stats(self):
         logger.error(f"Ошибка расшифровки Fornex API ключа: {e}")
         return f"Ошибка ключа: {e}"
 
-    base_url = (setting.api_base_url or 'https://fornex.com/api/').rstrip('/')
+    base_url = (setting.api_base_url or 'https://fornex.com/api').rstrip('/')
     headers = {
         'Authorization': f'Api-Key {api_key}',
         'Accept': 'application/json',
@@ -427,48 +431,38 @@ def collect_fornex_stats(self):
     # VPN серверы
     servers = Server.query.filter(Server.fornex_vps_id.isnot(None)).all()
     for server in servers:
-        url = f"{base_url}/vds/v1.0/{server.fornex_vps_id}/stat/"
         try:
-            resp = http_requests.get(url, headers=headers, timeout=15)
-            if resp.status_code != 200:
-                logger.warning(f"Fornex API для сервера {server.name}: HTTP {resp.status_code}")
-                continue
-            data = resp.json()
-            cpu, mem, net_in, net_out = _parse_fornex_stat(data)
+            metrics = _collect_fornex_for(base_url, server.fornex_vps_id, headers)
             stat = ServerStats(
                 server_id=server.id,
-                cpu_usage=cpu,
-                memory_usage=mem,
-                net_in_bytes=net_in,
-                net_out_bytes=net_out,
+                cpu_usage=metrics['cpu'],
+                memory_usage=metrics['mem'],
+                net_in_bytes=int(metrics['net_in']) if metrics['net_in'] is not None else None,
+                net_out_bytes=int(metrics['net_out']) if metrics['net_out'] is not None else None,
             )
             db.session.add(stat)
             collected += 1
-            logger.info(f"Fornex stats для {server.name}: cpu={cpu}% mem={mem}%")
+            logger.info(f"Fornex stats для {server.name} ({server.fornex_vps_id}): "
+                        f"cpu={metrics['cpu']}% mem={metrics['mem']}%")
         except Exception as e:
             logger.error(f"Ошибка Fornex API для сервера {server.name}: {e}")
 
     # HAProxy серверы
     haproxy_servers = HaproxyServer.query.filter(HaproxyServer.fornex_vps_id.isnot(None)).all()
     for hap in haproxy_servers:
-        url = f"{base_url}/vds/v1.0/{hap.fornex_vps_id}/stat/"
         try:
-            resp = http_requests.get(url, headers=headers, timeout=15)
-            if resp.status_code != 200:
-                logger.warning(f"Fornex API для HAProxy {hap.name}: HTTP {resp.status_code}")
-                continue
-            data = resp.json()
-            cpu, mem, net_in, net_out = _parse_fornex_stat(data)
+            metrics = _collect_fornex_for(base_url, hap.fornex_vps_id, headers)
             stat = HaproxyStats(
                 haproxy_server_id=hap.id,
-                cpu_usage=cpu,
-                memory_usage=mem,
-                net_in_bytes=net_in,
-                net_out_bytes=net_out,
+                cpu_usage=metrics['cpu'],
+                memory_usage=metrics['mem'],
+                net_in_bytes=int(metrics['net_in']) if metrics['net_in'] is not None else None,
+                net_out_bytes=int(metrics['net_out']) if metrics['net_out'] is not None else None,
             )
             db.session.add(stat)
             collected += 1
-            logger.info(f"Fornex stats для HAProxy {hap.name}: cpu={cpu}% mem={mem}%")
+            logger.info(f"Fornex stats для HAProxy {hap.name} ({hap.fornex_vps_id}): "
+                        f"cpu={metrics['cpu']}% mem={metrics['mem']}%")
         except Exception as e:
             logger.error(f"Ошибка Fornex API для HAProxy {hap.name}: {e}")
 

@@ -125,13 +125,13 @@ def fornex_settings():
             flash('Настройки Fornex API сохранены.', 'success')
 
         elif action == 'save_vps_ids':
-            # Сохраняем fornex_vps_id для каждого сервера
+            # Сохраняем fornex_vps_id для каждого сервера (строка, напр. "34-294241")
             for server in servers:
                 vps_id = request.form.get(f'server_{server.id}_vps_id', '').strip()
-                server.fornex_vps_id = int(vps_id) if vps_id.isdigit() else None
+                server.fornex_vps_id = vps_id if vps_id else None
             for hap in haproxy_servers:
                 vps_id = request.form.get(f'haproxy_{hap.id}_vps_id', '').strip()
-                hap.fornex_vps_id = int(vps_id) if vps_id.isdigit() else None
+                hap.fornex_vps_id = vps_id if vps_id else None
             db.session.commit()
             flash('ID серверов Fornex сохранены.', 'success')
 

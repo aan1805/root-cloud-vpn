@@ -45,7 +45,7 @@ class Server(db.Model):
     ssh_key_encrypted = db.Column(db.Text, nullable=True)  # зашифрованный приватный ключ
     ssh_key_passphrase_encrypted = db.Column(db.Text, nullable=True)  # если ключ с паролем
     status = db.Column(db.String(20), default='unknown')  # online, offline, unknown
-    fornex_vps_id = db.Column(db.Integer, nullable=True)  # ID VPS в Fornex (для сбора статистики)
+    fornex_vps_id = db.Column(db.String(50), nullable=True)  # Order ID в Fornex, напр. "34-294241"
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
@@ -124,7 +124,7 @@ class HaproxyServer(db.Model):
     config_path = db.Column(db.String(255), default='/etc/haproxy/haproxy.cfg')
     stats_socket_path = db.Column(db.String(255), default='/var/run/haproxy.sock')
     stats_port = db.Column(db.Integer, default=8404)  # для web статистики
-    fornex_vps_id = db.Column(db.Integer, nullable=True)  # ID VPS в Fornex
+    fornex_vps_id = db.Column(db.String(50), nullable=True)  # Order ID в Fornex, напр. "34-294241"
 
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
