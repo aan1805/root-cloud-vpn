@@ -205,6 +205,9 @@ def dashboard_summary():
         func.sum(TrafficStats.bytes_sent + TrafficStats.bytes_received)
     ).filter(TrafficStats.date >= month_start).scalar() or 0
 
+    traffic_today = int(traffic_today)
+    traffic_month = int(traffic_month)
+
     return jsonify({
         'servers': {
             'total': total_servers,
