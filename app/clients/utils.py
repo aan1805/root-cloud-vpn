@@ -31,34 +31,43 @@ def generate_xray_keys():
     return str(uuid.uuid4())
 
 
-def get_next_client_ip(server_id, protocol_id):
+def get_next_client_ip(server_id=None, protocol_id=None, group_id=None, protocol_type=None):
     """
-    Определяет следующий свободный IP адрес для клиента в подсети 10.8.0.0/24
-    Возвращает строку вида "10.8.0.X"
+    Определяет следующий свободный IP адрес для клиента в подсети 10.8.0.0/24.
+
+    Для одиночного клиента: ищет по server_id + protocol_id.
+    Для группового клиента: ищет по group_id + protocol_type.
+    В обоих случаях также проверяет конкурирующий тип, чтобы избежать коллизий.
     """
     from app.models import Client
 
-    # Получаем все IP, уже назначенные клиентам на этом сервере и протоколе
-    existing_ips = Client.query.filter_by(
-        server_id=server_id,
-        protocol_id=protocol_id
-    ).all()
-
     used_ips = set()
-    for client in existing_ips:
-        if client.extra_params and 'assigned_ip' in client.extra_params:
-            ip = client.extra_params['assigned_ip']
-            # Извлекаем последний октет
-            match = re.search(r'10\.8\.0\.(\d+)', ip)
-            if match:
-                used_ips.add(int(match.group(1)))
+
+    def _extract_octets(clients):
+        for c in clients:
+            if c.extra_params and 'assigned_ip' in c.extra_params:
+                m = re.search(r'10\.8\.0\.(\d+)', c.extra_params['assigned_ip'])
+                if m:
+                    used_ips.add(int(m.group(1)))
+
+    if group_id:
+        # Все клиенты группы с этим протоколом (group_id=group_id, server_id=NULL)
+        _extract_octets(Client.query.filter_by(
+            group_id=group_id,
+            protocol_type=protocol_type
+        ).all())
+    elif server_id and protocol_id:
+        # Прямые клиенты сервера
+        _extract_octets(Client.query.filter_by(
+            server_id=server_id,
+            protocol_id=protocol_id
+        ).all())
 
     # Ищем первый свободный IP от 2 до 254 (10.8.0.1 занят сервером)
     for i in range(2, 255):
         if i not in used_ips:
             return f"10.8.0.{i}"
 
-    # Если все IP заняты (маловероятно для /24 подсети)
     raise ValueError("Нет свободных IP адресов в подсети 10.8.0.0/24")
 
 
@@ -520,19 +529,18 @@ def generate_keys_for_client(client):
         extra_params['psk'] = encrypt_data(psk)
 
         if 'assigned_ip' not in extra_params:
-            ref_server_id = client.server_id
-            ref_protocol_id = client.protocol_id
-
-            if not ref_server_id and client.group:
-                first_server = client.group.servers[0] if client.group.servers else None
-                if first_server:
-                    ref_server_id = first_server.id
-                    proto = next((p for p in first_server.protocols if p.protocol_type == 'awg'), None)
-                    if proto:
-                        ref_protocol_id = proto.id
-
-            if ref_server_id and ref_protocol_id:
-                assigned_ip = get_next_client_ip(ref_server_id, ref_protocol_id)
+            if client.group_id:
+                # Групповой клиент: ищем свободный IP среди всех клиентов группы
+                assigned_ip = get_next_client_ip(
+                    group_id=client.group_id,
+                    protocol_type='awg'
+                )
+                extra_params['assigned_ip'] = assigned_ip
+            elif client.server_id and client.protocol_id:
+                assigned_ip = get_next_client_ip(
+                    server_id=client.server_id,
+                    protocol_id=client.protocol_id
+                )
                 extra_params['assigned_ip'] = assigned_ip
 
         client.extra_params = extra_params
