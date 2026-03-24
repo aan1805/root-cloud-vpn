@@ -4,7 +4,7 @@ from sqlalchemy import func
 from app import db
 from app.api import bp
 from app.api.auth import token_required
-from app.models import TrafficStats, ServerStats, Client, Server
+from app.models import TrafficStats, ServerStats, HaproxyStats, Client, Server, HaproxyServer
 from datetime import datetime, timedelta, date
 
 
@@ -109,7 +109,7 @@ def all_servers_traffic_stats():
 @bp.route('/stats/server/<int:server_id>/resources', methods=['GET'])
 @token_required
 def server_resources_stats(server_id):
-    """Статистика использования ресурсов сервера (CPU, RAM)"""
+    """Статистика использования ресурсов сервера (CPU, RAM, сеть)"""
     server = Server.query.get_or_404(server_id)
 
     hours = request.args.get('hours', 24, type=int)
@@ -127,10 +127,59 @@ def server_resources_stats(server_id):
             'timestamp': s.timestamp.isoformat(),
             'cpu_usage': s.cpu_usage,
             'memory_usage': s.memory_usage,
-            'load_1min': s.load_1min
+            'load_1min': s.load_1min,
+            'net_in_bytes': s.net_in_bytes,
+            'net_out_bytes': s.net_out_bytes,
         } for s in stats]
     }
 
+    return jsonify(result)
+
+
+@bp.route('/stats/servers/resources/latest', methods=['GET'])
+@token_required
+def all_servers_resources_latest():
+    """Последние показатели ресурсов всех VPN-серверов (для дашборда)"""
+    servers = Server.query.all()
+    result = []
+    for server in servers:
+        stat = ServerStats.query.filter_by(server_id=server.id) \
+            .order_by(ServerStats.timestamp.desc()).first()
+        result.append({
+            'server_id': server.id,
+            'server_name': server.name,
+            'status': server.status,
+            'fornex_vps_id': server.fornex_vps_id,
+            'cpu_usage': stat.cpu_usage if stat else None,
+            'memory_usage': stat.memory_usage if stat else None,
+            'load_1min': stat.load_1min if stat else None,
+            'net_in_bytes': stat.net_in_bytes if stat else None,
+            'net_out_bytes': stat.net_out_bytes if stat else None,
+            'last_update': stat.timestamp.isoformat() if stat else None,
+        })
+    return jsonify(result)
+
+
+@bp.route('/stats/haproxy/resources/latest', methods=['GET'])
+@token_required
+def all_haproxy_resources_latest():
+    """Последние показатели ресурсов балансировщиков HAProxy"""
+    haproxy_servers = HaproxyServer.query.all()
+    result = []
+    for hap in haproxy_servers:
+        stat = HaproxyStats.query.filter_by(haproxy_server_id=hap.id) \
+            .order_by(HaproxyStats.timestamp.desc()).first()
+        result.append({
+            'haproxy_id': hap.id,
+            'haproxy_name': hap.name,
+            'fornex_vps_id': hap.fornex_vps_id,
+            'cpu_usage': stat.cpu_usage if stat else None,
+            'memory_usage': stat.memory_usage if stat else None,
+            'load_1min': stat.load_1min if stat else None,
+            'net_in_bytes': stat.net_in_bytes if stat else None,
+            'net_out_bytes': stat.net_out_bytes if stat else None,
+            'last_update': stat.timestamp.isoformat() if stat else None,
+        })
     return jsonify(result)
 
 

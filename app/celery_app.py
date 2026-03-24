@@ -46,6 +46,10 @@ celery.conf.beat_schedule = {
         'task': 'app.tasks.cleanup_session_tokens',
         'schedule': crontab(hour=3, minute=0),
     },
+    'collect-fornex-stats-every-15-minutes': {
+        'task': 'app.tasks.collect_fornex_stats',
+        'schedule': crontab(minute='*/15'),
+    },
 }
 
 

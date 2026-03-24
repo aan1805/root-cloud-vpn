@@ -1,11 +1,13 @@
 from app.celery_app import celery
-from app.models import Client, Server, ServerProtocol, ServerStats, TrafficStats, ApiToken
+from app.models import Client, Server, ServerProtocol, ServerStats, TrafficStats, ApiToken, HaproxyServer, HaproxyStats, FornexSetting
 from app.extensions import db
 from app.servers.ssh import execute_ssh_command
 from app.utils.crypto import decrypt_data
 from datetime import datetime, date, timedelta
+from sqlalchemy import or_, and_
 import logging
 import re
+import requests as http_requests
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,7 @@ def collect_all_stats(self):
         collect_server_stats.delay(server.id)
         collect_detailed_wg_stats.delay(server.id)
         collect_server_resources.delay(server.id)
+    collect_fornex_stats.delay()
     return f"Запущен сбор статистики для {len(servers)} серверов"
 
 
@@ -75,11 +78,19 @@ def collect_wg_stats(server, protocol, ssh_key, passphrase):
         transfer_tx = int(parts[6])  # отправлено байт
 
         # Находим клиента с таким публичным ключом
+        # Сначала ищем прямого клиента сервера
         client = Client.query.filter_by(
             server_id=server.id,
             protocol_id=protocol.id,
             public_key=public_key
         ).first()
+        # Если не нашли — ищем группового клиента (server_id=NULL, привязан к группе сервера)
+        if not client and server.group_id:
+            client = Client.query.filter(
+                Client.public_key == public_key,
+                Client.group_id == server.group_id,
+                Client.protocol_type == protocol.protocol_type
+            ).first()
 
         if client:
             # Обновляем использованный трафик (сумма RX + TX)
@@ -123,12 +134,19 @@ def collect_xray_stats(server, protocol, ssh_key, passphrase):
 
         # Обновляем клиентов в БД
         for email, total_bytes in user_traffic.items():
-            # Ищем клиента по email или по extra_params['email']
+            # Ищем прямого клиента сервера
             client = Client.query.filter(
                 Client.server_id == server.id,
                 Client.protocol_id == protocol.id,
                 (Client.email == email) | (Client.extra_params['email'].astext == email)
             ).first()
+            # Групповой клиент (server_id=NULL)
+            if not client and server.group_id:
+                client = Client.query.filter(
+                    Client.group_id == server.group_id,
+                    Client.protocol_type == protocol.protocol_type,
+                    (Client.email == email) | (Client.extra_params['email'].astext == email)
+                ).first()
 
             if client:
                 client.traffic_used_bytes = total_bytes
@@ -253,6 +271,12 @@ def collect_detailed_wg_stats(self, server_id):
                     protocol_id=protocol.id,
                     public_key=public_key
                 ).first()
+                if not client and server.group_id:
+                    client = Client.query.filter(
+                        Client.public_key == public_key,
+                        Client.group_id == server.group_id,
+                        Client.protocol_type == protocol.protocol_type
+                    ).first()
 
                 if client:
                     # Сохраняем статистику за сегодня
@@ -326,6 +350,130 @@ def collect_server_resources(self, server_id):
         db.session.commit()
     except ValueError:
         pass
+
+
+def _parse_fornex_stat(data):
+    """
+    Парсит ответ Fornex API /api/vds/v1.0/{id}/stat/.
+    Поддерживает форматы: {cpu, mem, net: {in, out}} и плоский {cpu_load, memory_usage, net_in, net_out}.
+    Возвращает (cpu_pct, mem_pct, net_in_bytes, net_out_bytes) — значения могут быть None.
+    """
+    cpu = data.get('cpu') or data.get('cpu_load') or data.get('cpu_usage')
+    mem = data.get('mem') or data.get('memory') or data.get('memory_usage') or data.get('ram')
+
+    net = data.get('net') or {}
+    if isinstance(net, dict):
+        net_in = net.get('in') or net.get('rx')
+        net_out = net.get('out') or net.get('tx')
+    else:
+        net_in = None
+        net_out = None
+
+    # Плоский формат
+    if net_in is None:
+        net_in = data.get('net_in') or data.get('network_in') or data.get('rx_bytes')
+    if net_out is None:
+        net_out = data.get('net_out') or data.get('network_out') or data.get('tx_bytes')
+
+    try:
+        cpu = float(cpu) if cpu is not None else None
+    except (TypeError, ValueError):
+        cpu = None
+    try:
+        mem = float(mem) if mem is not None else None
+    except (TypeError, ValueError):
+        mem = None
+    try:
+        net_in = int(net_in) if net_in is not None else None
+    except (TypeError, ValueError):
+        net_in = None
+    try:
+        net_out = int(net_out) if net_out is not None else None
+    except (TypeError, ValueError):
+        net_out = None
+
+    return cpu, mem, net_in, net_out
+
+
+@celery.task(bind=True)
+def collect_fornex_stats(self):
+    """
+    Собирает статистику серверов через Fornex API.
+    Endpoint: GET {base_url}vds/v1.0/{vps_id}/stat/
+    Auth: Authorization: Api-Key {key}
+
+    Обновляет ServerStats для VPN-серверов и HaproxyStats для балансировщиков.
+    """
+    setting = FornexSetting.get()
+    if not setting:
+        logger.debug("Fornex API не настроен, пропускаем сбор статистики")
+        return "Fornex не настроен"
+
+    from app.utils.crypto import decrypt_data as _decrypt
+    try:
+        api_key = _decrypt(setting.api_key_encrypted)
+    except Exception as e:
+        logger.error(f"Ошибка расшифровки Fornex API ключа: {e}")
+        return f"Ошибка ключа: {e}"
+
+    base_url = (setting.api_base_url or 'https://fornex.com/api/').rstrip('/')
+    headers = {
+        'Authorization': f'Api-Key {api_key}',
+        'Accept': 'application/json',
+    }
+
+    collected = 0
+
+    # VPN серверы
+    servers = Server.query.filter(Server.fornex_vps_id.isnot(None)).all()
+    for server in servers:
+        url = f"{base_url}/vds/v1.0/{server.fornex_vps_id}/stat/"
+        try:
+            resp = http_requests.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                logger.warning(f"Fornex API для сервера {server.name}: HTTP {resp.status_code}")
+                continue
+            data = resp.json()
+            cpu, mem, net_in, net_out = _parse_fornex_stat(data)
+            stat = ServerStats(
+                server_id=server.id,
+                cpu_usage=cpu,
+                memory_usage=mem,
+                net_in_bytes=net_in,
+                net_out_bytes=net_out,
+            )
+            db.session.add(stat)
+            collected += 1
+            logger.info(f"Fornex stats для {server.name}: cpu={cpu}% mem={mem}%")
+        except Exception as e:
+            logger.error(f"Ошибка Fornex API для сервера {server.name}: {e}")
+
+    # HAProxy серверы
+    haproxy_servers = HaproxyServer.query.filter(HaproxyServer.fornex_vps_id.isnot(None)).all()
+    for hap in haproxy_servers:
+        url = f"{base_url}/vds/v1.0/{hap.fornex_vps_id}/stat/"
+        try:
+            resp = http_requests.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                logger.warning(f"Fornex API для HAProxy {hap.name}: HTTP {resp.status_code}")
+                continue
+            data = resp.json()
+            cpu, mem, net_in, net_out = _parse_fornex_stat(data)
+            stat = HaproxyStats(
+                haproxy_server_id=hap.id,
+                cpu_usage=cpu,
+                memory_usage=mem,
+                net_in_bytes=net_in,
+                net_out_bytes=net_out,
+            )
+            db.session.add(stat)
+            collected += 1
+            logger.info(f"Fornex stats для HAProxy {hap.name}: cpu={cpu}% mem={mem}%")
+        except Exception as e:
+            logger.error(f"Ошибка Fornex API для HAProxy {hap.name}: {e}")
+
+    db.session.commit()
+    return f"Собрана Fornex статистика для {collected} серверов"
 
 
 @celery.task(bind=True)

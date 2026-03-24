@@ -128,6 +128,52 @@
         </div>
     </div>
 </div>
+
+<!-- Server Resources -->
+<div class="row g-3 mt-1">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">
+                Нагрузка VPN серверов
+                <span class="text-muted fw-normal small ms-1">(Fornex)</span>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="vpn-resources">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Сервер</th>
+                            <th>CPU</th>
+                            <th>RAM</th>
+                            <th>Обновлено</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="4" class="text-center text-muted ps-3 py-2">Загрузка...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">
+                Нагрузка балансировщиков HAProxy
+                <span class="text-muted fw-normal small ms-1">(Fornex)</span>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="haproxy-resources">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Балансировщик</th>
+                            <th>CPU</th>
+                            <th>RAM</th>
+                            <th>Обновлено</th>
+                        </tr>
+                    </thead>
+                    <tbody><tr><td colspan="4" class="text-center text-muted ps-3 py-2">Загрузка...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -164,6 +210,16 @@ async function loadDashboardData() {
         const serversResponse = await apiFetch('/api/v1/servers');
         if (serversResponse.ok) {
             updateServersTable(await serversResponse.json());
+        }
+
+        const vpnResourcesResponse = await apiFetch('/api/v1/stats/servers/resources/latest');
+        if (vpnResourcesResponse.ok) {
+            updateVpnResourcesTable(await vpnResourcesResponse.json());
+        }
+
+        const haproxyResourcesResponse = await apiFetch('/api/v1/stats/haproxy/resources/latest');
+        if (haproxyResourcesResponse.ok) {
+            updateHaproxyResourcesTable(await haproxyResourcesResponse.json());
         }
 
     } catch (error) {
@@ -260,6 +316,67 @@ function updateClientsTable(clients) {
             <td><span class="badge bg-${client.status === 'active' ? 'success' : 'secondary'}">${client.status}</span></td>
         `;
     }
+}
+
+function fmtPct(v) {
+    if (v == null) return '<span class="text-muted">—</span>';
+    const pct = parseFloat(v).toFixed(1);
+    const color = pct > 80 ? 'danger' : pct > 60 ? 'warning' : 'success';
+    return `<div class="d-flex align-items-center gap-2">
+        <div class="progress flex-grow-1" style="height:6px">
+            <div class="progress-bar bg-${color}" style="width:${pct}%"></div>
+        </div>
+        <span class="text-${color} small">${pct}%</span>
+    </div>`;
+}
+
+function fmtTime(ts) {
+    if (!ts) return '<span class="text-muted">—</span>';
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMin = Math.round((now - d) / 60000);
+    if (diffMin < 1) return '<span class="text-success small">только что</span>';
+    if (diffMin < 60) return `<span class="text-muted small">${diffMin} мин назад</span>`;
+    return `<span class="text-muted small">${d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'})}</span>`;
+}
+
+function updateVpnResourcesTable(data) {
+    const tbody = document.querySelector('#vpn-resources tbody');
+    if (!tbody) return;
+    if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted ps-3 py-2">Нет данных. Настройте Fornex VPS ID в <a href="/settings/fornex">настройках</a>.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(s => `
+        <tr>
+            <td class="ps-3">
+                <span class="badge bg-${s.status === 'online' ? 'success' : 'secondary'} me-1" style="width:8px;height:8px;padding:0;border-radius:50%;display:inline-block"></span>
+                ${s.server_name}
+                ${!s.fornex_vps_id ? '<span class="badge bg-warning text-dark ms-1 small">без Fornex ID</span>' : ''}
+            </td>
+            <td style="min-width:120px">${fmtPct(s.cpu_usage)}</td>
+            <td style="min-width:120px">${fmtPct(s.memory_usage)}</td>
+            <td>${fmtTime(s.last_update)}</td>
+        </tr>`).join('');
+}
+
+function updateHaproxyResourcesTable(data) {
+    const tbody = document.querySelector('#haproxy-resources tbody');
+    if (!tbody) return;
+    if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted ps-3 py-2">Нет HAProxy серверов.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(s => `
+        <tr>
+            <td class="ps-3">
+                ${s.haproxy_name}
+                ${!s.fornex_vps_id ? '<span class="badge bg-warning text-dark ms-1 small">без Fornex ID</span>' : ''}
+            </td>
+            <td style="min-width:120px">${fmtPct(s.cpu_usage)}</td>
+            <td style="min-width:120px">${fmtPct(s.memory_usage)}</td>
+            <td>${fmtTime(s.last_update)}</td>
+        </tr>`).join('');
 }
 
 document.addEventListener('DOMContentLoaded', loadDashboardData);

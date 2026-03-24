@@ -1,7 +1,7 @@
 from flask import render_template, redirect, url_for, flash, request
 from flask_login import login_required
 from app.main import bp
-from app.models import ApiToken, OIDCSetting, ServerGroup, Server, OIDCUser, Client
+from app.models import ApiToken, OIDCSetting, ServerGroup, Server, OIDCUser, Client, FornexSetting, HaproxyServer
 from app.extensions import db
 from app.utils.crypto import encrypt_data
 from datetime import datetime
@@ -93,6 +93,52 @@ def oidc_settings():
 def oidc_users():
     users = OIDCUser.query.order_by(OIDCUser.last_login.desc().nullslast()).all()
     return render_template('settings/oidc_users.html', users=users)
+
+
+@bp.route('/settings/fornex', methods=['GET', 'POST'])
+@login_required
+def fornex_settings():
+    setting = FornexSetting.get()
+    servers = Server.query.order_by(Server.name).all()
+    haproxy_servers = HaproxyServer.query.order_by(HaproxyServer.name).all()
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+
+        if action == 'save_api':
+            api_key = request.form.get('api_key', '').strip()
+            api_base_url = request.form.get('api_base_url', 'https://fornex.com/api/').strip()
+
+            if not api_key and setting is None:
+                flash('API ключ обязателен.', 'danger')
+                return render_template('settings/fornex.html', setting=setting,
+                                       servers=servers, haproxy_servers=haproxy_servers)
+
+            if setting is None:
+                setting = FornexSetting()
+                db.session.add(setting)
+
+            if api_key:
+                setting.api_key_encrypted = encrypt_data(api_key)
+            setting.api_base_url = api_base_url or 'https://fornex.com/api/'
+            db.session.commit()
+            flash('Настройки Fornex API сохранены.', 'success')
+
+        elif action == 'save_vps_ids':
+            # Сохраняем fornex_vps_id для каждого сервера
+            for server in servers:
+                vps_id = request.form.get(f'server_{server.id}_vps_id', '').strip()
+                server.fornex_vps_id = int(vps_id) if vps_id.isdigit() else None
+            for hap in haproxy_servers:
+                vps_id = request.form.get(f'haproxy_{hap.id}_vps_id', '').strip()
+                hap.fornex_vps_id = int(vps_id) if vps_id.isdigit() else None
+            db.session.commit()
+            flash('ID серверов Fornex сохранены.', 'success')
+
+        return redirect(url_for('main.fornex_settings'))
+
+    return render_template('settings/fornex.html', setting=setting,
+                           servers=servers, haproxy_servers=haproxy_servers)
 
 
 @bp.route('/settings/oidc-users/<int:id>/delete', methods=['POST'])

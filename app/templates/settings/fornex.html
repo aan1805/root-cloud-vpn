@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0 fw-bold">Fornex API</h4>
+</div>
+
+<div class="row g-3">
+    <!-- API Key -->
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">Настройки API</div>
+            <div class="card-body">
+                <form method="post">
+                    <input type="hidden" name="action" value="save_api">
+                    <div class="mb-3">
+                        <label class="form-label">API ключ</label>
+                        <input type="password" name="api_key" class="form-control"
+                               placeholder="{% if setting %}Оставьте пустым, чтобы не менять{% else %}Введите API ключ Fornex{% endif %}">
+                        <div class="form-text">
+                            Получить ключ можно в личном кабинете Fornex →
+                            <a href="https://fornex.com/profile/api/" target="_blank">fornex.com/profile/api/</a>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Base URL API</label>
+                        <input type="text" name="api_base_url" class="form-control"
+                               value="{{ setting.api_base_url if setting else 'https://fornex.com/api/' }}">
+                        <div class="form-text">
+                            Статистика запрашивается по адресу: {base_url}/vds/v1.0/{vps_id}/stat/<br>
+                            Auth заголовок: <code>Authorization: Api-Key &lt;key&gt;</code>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save"></i> Сохранить
+                    </button>
+                    {% if setting %}
+                    <span class="text-success ms-2"><i class="bi bi-check-circle"></i> API настроен</span>
+                    {% else %}
+                    <span class="text-warning ms-2"><i class="bi bi-exclamation-triangle"></i> Не настроен</span>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info -->
+    <div class="col-md-5">
+        <div class="card border-0 bg-light">
+            <div class="card-body">
+                <h6 class="fw-semibold">Как это работает</h6>
+                <p class="small text-muted mb-2">
+                    Celery каждые 15 минут запрашивает статистику у Fornex API для всех серверов с заданным VPS ID.
+                    Данные (CPU, RAM, трафик) сохраняются в БД и отображаются на дашборде.
+                </p>
+                <p class="small text-muted mb-0">
+                    <strong>Ожидаемый формат ответа API:</strong><br>
+                    <code>{"cpu": 12.5, "mem": 45.1, "net": {"in": 1234, "out": 5678}}</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- VPN Server VPS IDs -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-white border-0 fw-semibold">VPS ID серверов</div>
+            <div class="card-body">
+                <form method="post">
+                    <input type="hidden" name="action" value="save_vps_ids">
+                    <p class="text-muted small">
+                        Укажите ID VPS в панели Fornex для каждого сервера.
+                        Найти можно в адресной строке: fornex.com/vds/<strong>12345</strong>/
+                    </p>
+
+                    {% if servers %}
+                    <h6 class="fw-semibold mt-3 mb-2">VPN серверы</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Сервер</th>
+                                    <th>IP</th>
+                                    <th style="width:180px">Fornex VPS ID</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for server in servers %}
+                            <tr>
+                                <td>{{ server.name }}</td>
+                                <td class="text-muted">{{ server.ip }}</td>
+                                <td>
+                                    <input type="number" name="server_{{ server.id }}_vps_id"
+                                           class="form-control form-control-sm"
+                                           value="{{ server.fornex_vps_id or '' }}"
+                                           placeholder="ID">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted small">Нет VPN серверов.</p>
+                    {% endif %}
+
+                    {% if haproxy_servers %}
+                    <h6 class="fw-semibold mt-3 mb-2">HAProxy балансировщики</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Балансировщик</th>
+                                    <th>IP</th>
+                                    <th style="width:180px">Fornex VPS ID</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for hap in haproxy_servers %}
+                            <tr>
+                                <td>{{ hap.name }}</td>
+                                <td class="text-muted">{{ hap.ip }}</td>
+                                <td>
+                                    <input type="number" name="haproxy_{{ hap.id }}_vps_id"
+                                           class="form-control form-control-sm"
+                                           value="{{ hap.fornex_vps_id or '' }}"
+                                           placeholder="ID">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted small">Нет HAProxy серверов.</p>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary mt-2">
+                        <i class="bi bi-save"></i> Сохранить ID серверов
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

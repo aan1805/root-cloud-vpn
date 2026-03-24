@@ -45,6 +45,7 @@ class Server(db.Model):
     ssh_key_encrypted = db.Column(db.Text, nullable=True)  # зашифрованный приватный ключ
     ssh_key_passphrase_encrypted = db.Column(db.Text, nullable=True)  # если ключ с паролем
     status = db.Column(db.String(20), default='unknown')  # online, offline, unknown
+    fornex_vps_id = db.Column(db.Integer, nullable=True)  # ID VPS в Fornex (для сбора статистики)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
 
@@ -123,6 +124,7 @@ class HaproxyServer(db.Model):
     config_path = db.Column(db.String(255), default='/etc/haproxy/haproxy.cfg')
     stats_socket_path = db.Column(db.String(255), default='/var/run/haproxy.sock')
     stats_port = db.Column(db.Integer, default=8404)  # для web статистики
+    fornex_vps_id = db.Column(db.Integer, nullable=True)  # ID VPS в Fornex
 
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -231,6 +233,39 @@ class ServerStats(db.Model):
     cpu_usage = db.Column(db.Float)  # процент использования CPU
     memory_usage = db.Column(db.Float)  # процент использования RAM
     load_1min = db.Column(db.Float)  # load average за 1 минуту
+    net_in_bytes = db.Column(db.BigInteger)   # байт получено (из Fornex API)
+    net_out_bytes = db.Column(db.BigInteger)  # байт отправлено (из Fornex API)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     server = db.relationship('Server', backref=db.backref('stats', lazy='dynamic'))
+
+
+class HaproxyStats(db.Model):
+    """Статистика балансировщика HAProxy (CPU, RAM, нагрузка)"""
+    __tablename__ = 'haproxy_stats'
+
+    id = db.Column(db.Integer, primary_key=True)
+    haproxy_server_id = db.Column(db.Integer, db.ForeignKey('haproxy_servers.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    cpu_usage = db.Column(db.Float)
+    memory_usage = db.Column(db.Float)
+    load_1min = db.Column(db.Float)
+    net_in_bytes = db.Column(db.BigInteger)
+    net_out_bytes = db.Column(db.BigInteger)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    haproxy_server = db.relationship('HaproxyServer', backref=db.backref('stats', lazy='dynamic'))
+
+
+class FornexSetting(db.Model):
+    """Настройки Fornex API для сбора статистики серверов"""
+    __tablename__ = 'fornex_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    api_key_encrypted = db.Column(db.Text, nullable=False)
+    # Базовый URL API, например https://fornex.com/api/
+    api_base_url = db.Column(db.String(255), default='https://fornex.com/api/')
+
+    @staticmethod
+    def get():
+        return FornexSetting.query.first()
