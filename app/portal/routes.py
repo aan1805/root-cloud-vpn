@@ -294,10 +294,12 @@ def callback():
     is_new = user is None
 
     if user is None:
+        default_limit = setting.default_client_limit if setting else 0
         user = OIDCUser(
             sub=sub,
             email=userinfo.get('email'),
-            name=userinfo.get('name') or userinfo.get('preferred_username')
+            name=userinfo.get('name') or userinfo.get('preferred_username'),
+            client_limit=default_limit
         )
         db.session.add(user)
     else:

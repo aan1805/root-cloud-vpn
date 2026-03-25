@@ -81,6 +81,17 @@
                         </select>
                     </div>
 
+                    <hr>
+                    <p class="fw-semibold mb-2">Лимит клиентов по умолчанию</p>
+                    <div class="mb-3">
+                        <label class="form-label">Лимит для новых пользователей</label>
+                        <input type="number" name="default_client_limit" class="form-control"
+                               style="max-width: 200px;"
+                               value="{{ setting.default_client_limit if setting else 0 }}"
+                               min="0" step="1">
+                        <div class="form-text">0 — без ограничений. Применяется только при первом входе нового пользователя. Изменить лимит конкретного пользователя можно в разделе «Пользователи портала».</div>
+                    </div>
+
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-save"></i> Сохранить
                     </button>
@@ -122,13 +133,20 @@
             <div class="card-body small">
                 <p><strong>Provider:</strong> {{ setting.provider_url }}</p>
                 <p><strong>Client ID:</strong> {{ setting.client_id }}</p>
-                <p class="mb-0"><strong>Авто-провизионирование:</strong>
+                <p><strong>Авто-провизионирование:</strong>
                     {% if setting.auto_protocol_type %}
                         {{ setting.auto_protocol_type.upper() }}
                         {% if setting.auto_group %}в группе "{{ setting.auto_group.name }}"{% endif %}
                         {% if setting.auto_server %}на сервере "{{ setting.auto_server.name }}"{% endif %}
                     {% else %}
                         отключено
+                    {% endif %}
+                </p>
+                <p class="mb-0"><strong>Лимит клиентов для новых:</strong>
+                    {% if setting.default_client_limit > 0 %}
+                        {{ setting.default_client_limit }}
+                    {% else %}
+                        без ограничений
                     {% endif %}
                 </p>
             </div>

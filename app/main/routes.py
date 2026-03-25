@@ -81,6 +81,7 @@ def oidc_settings():
         setting.auto_group_id = int(auto_group_id) if auto_group_id else None
         setting.auto_server_id = int(auto_server_id) if auto_server_id else None
         setting.auto_protocol_type = auto_protocol_type
+        setting.default_client_limit = max(0, request.form.get('default_client_limit', 0, type=int))
         db.session.commit()
         flash('Настройки OIDC сохранены.', 'success')
         return redirect(url_for('main.oidc_settings'))

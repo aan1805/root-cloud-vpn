@@ -293,7 +293,7 @@ function updateServersTable(servers) {
             <td class="ps-3">${server.name}</td>
             <td>${server.ip}</td>
             <td><span class="badge bg-${server.status === 'online' ? 'success' : 'danger'}">${server.status}</span></td>
-            <td><a href="/servers/${server.id}/protocols" class="btn btn-sm btn-outline-secondary py-0">Просмотр</a></td>
+            <td><a href="/admin/servers/${server.id}/protocols" class="btn btn-sm btn-outline-secondary py-0">Просмотр</a></td>
         `;
     }
 }
@@ -310,7 +310,7 @@ function updateClientsTable(clients) {
         const row = tbody.insertRow();
         const gb = ((client.traffic_used_mb || 0) / 1024).toFixed(2);
         row.innerHTML = `
-            <td class="ps-3"><a href="/clients/${client.id}">${client.name}</a></td>
+            <td class="ps-3"><a href="/admin/clients/${client.id}">${client.name}</a></td>
             <td>${client.server_id ? 'Сервер #' + client.server_id : 'Группа'}</td>
             <td>${gb} GB</td>
             <td><span class="badge bg-${client.status === 'active' ? 'success' : 'secondary'}">${client.status}</span></td>

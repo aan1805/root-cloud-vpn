@@ -231,6 +231,7 @@ class OIDCSetting(db.Model):
     auto_group_id = db.Column(db.Integer, db.ForeignKey('server_groups.id'), nullable=True)
     auto_server_id = db.Column(db.Integer, db.ForeignKey('servers.id'), nullable=True)
     auto_protocol_type = db.Column(db.String(20), nullable=True)
+    default_client_limit = db.Column(db.Integer, default=0)  # 0 = безлимит для новых пользователей
 
     auto_group = db.relationship('ServerGroup', foreign_keys=[auto_group_id])
     auto_server = db.relationship('Server', foreign_keys=[auto_server_id])
