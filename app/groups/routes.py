@@ -69,7 +69,7 @@ def edit(id):
         if want_reality:
             haproxy_id = form.reality_haproxy_server_id.data
             port = form.reality_port.data or 4443
-            sni = form.reality_sni.data or 'www.microsoft.com'
+            sni = form.reality_sni.data or 'yandex.ru'
 
             settings_changed = (
                 not group.reality_enabled

@@ -12,7 +12,7 @@ class GroupForm(FlaskForm):
     reality_enabled = BooleanField('Включить XRay Reality (обход цензуры)')
     reality_port = IntegerField('Reality порт', default=4443,
                                 validators=[Optional(), NumberRange(min=1024, max=65535)])
-    reality_sni = StringField('SNI домен', default='www.microsoft.com')
+    reality_sni = StringField('SNI домен', default='yandex.ru')
     reality_haproxy_server_id = SelectField('HAProxy сервер', coerce=int, validators=[Optional()])
 
     submit = SubmitField('Сохранить группу')
