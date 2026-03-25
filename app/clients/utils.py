@@ -268,12 +268,80 @@ def remove_client_from_server(client):
     return False, f"Неподдерживаемый протокол: {protocol.protocol_type}"
 
 
+def apply_relay_uuid_to_group_servers(group, relay_uuid):
+    """Добавляет relay UUID на все XRay серверы группы (нужен для Reality chaining)."""
+    from app.models import ServerProtocol
+
+    relay_entry = {
+        'id': relay_uuid,
+        'email': 'relay@reality',
+        'flow': 'xtls-rprx-vision'
+    }
+
+    for server in group.servers:
+        protocol = ServerProtocol.query.filter_by(
+            server_id=server.id,
+            protocol_type='xray',
+            status='installed'
+        ).first()
+        if not protocol:
+            continue
+
+        ssh_key = decrypt_data(server.ssh_key_encrypted)
+        passphrase = decrypt_data(server.ssh_key_passphrase_encrypted) if server.ssh_key_passphrase_encrypted else None
+
+        get_cmd = "cat /opt/amnezia/xray/config.json"
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, get_cmd, passphrase
+        )
+        if exit_code != 0:
+            continue
+
+        try:
+            config = json.loads(stdout)
+        except json.JSONDecodeError:
+            continue
+
+        for inbound in config.get('inbounds', []):
+            if inbound.get('protocol') == 'vless':
+                clients = inbound['settings'].setdefault('clients', [])
+                if not any(c.get('id') == relay_uuid for c in clients):
+                    clients.append(relay_entry)
+                break
+        else:
+            continue  # no vless inbound found
+
+        new_config_json = json.dumps(config, indent=2)
+        escaped_json = new_config_json.replace("'", "'\\''")
+        write_cmd = f"echo '{escaped_json}' | sudo tee /opt/amnezia/xray/config.json > /dev/null"
+        exit_code, _, _ = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, write_cmd, passphrase
+        )
+        if exit_code != 0:
+            continue
+
+        execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, "sudo docker exec xray-reality kill -HUP 1", passphrase
+        )
+
+
 def resolve_client_endpoint(client):
     """Возвращает (address, port) для клиента с учётом HAProxy и групповых клиентов."""
     connection_address = client.server.ip if client.server else None
     connection_port = client.protocol.port if client.protocol else None
 
     if client.group_id:
+        group = client.group
+        # Reality group: вернуть Reality endpoint на HAProxy
+        if (group and group.reality_enabled and group.reality_haproxy_server_id
+                and group.reality_port and client.protocol_type == 'xray'):
+            hs = group.reality_haproxy_server
+            if hs and hs.xray_status == 'installed':
+                return hs.ip, group.reality_port
+
         from app.models import HaproxyBackend
         proto_type = client.protocol_type
         backend = HaproxyBackend.query.filter_by(
@@ -326,15 +394,29 @@ def generate_client_config(client):
     elif proto_type == 'xray':
         uuid = client.extra_params.get('uuid')
         public_key = None
-        if client.protocol:
-            public_key = client.protocol.config_params.get('public_key')
-        elif client.group:
-            for srv in client.group.servers:
-                proto = next((p for p in srv.protocols if p.protocol_type == 'xray' and p.status == 'installed'), None)
-                if proto:
-                    public_key = proto.config_params.get('public_key')
-                    break
-        
+        sni = 'www.microsoft.com'
+
+        # Reality через HAProxy: используем ключ и SNI с HAProxy сервера
+        if client.group_id and client.group and client.group.reality_enabled:
+            hs = client.group.reality_haproxy_server
+            if hs:
+                public_key = hs.xray_public_key
+                sni = client.group.reality_sni or 'www.microsoft.com'
+
+        # Обычный XRay: ключ из ServerProtocol или первого сервера группы
+        if public_key is None:
+            if client.protocol:
+                public_key = client.protocol.config_params.get('public_key')
+            elif client.group:
+                for srv in client.group.servers:
+                    proto = next(
+                        (p for p in srv.protocols if p.protocol_type == 'xray' and p.status == 'installed'),
+                        None
+                    )
+                    if proto:
+                        public_key = proto.config_params.get('public_key')
+                        break
+
         params = {
             'security': 'reality',
             'encryption': 'none',
@@ -342,7 +424,7 @@ def generate_client_config(client):
             'sid': '6ba85179e30d4fc2',
             'type': 'tcp',
             'flow': 'xtls-rprx-vision',
-            'sni': 'www.microsoft.com'
+            'sni': sni
         }
         query = '&'.join([f"{k}={v}" for k, v in params.items() if v])
         return f"vless://{uuid}@{connection_address}:{connection_port}?{query}#{client.name}"

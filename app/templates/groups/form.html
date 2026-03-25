@@ -4,7 +4,7 @@
 <h1>{{ title }}</h1>
 
 <div class="row">
-    <div class="col-md-6">
+    <div class="col-md-7">
         <form method="POST">
             {{ form.hidden_tag() }}
             <div class="mb-3">
@@ -20,9 +20,70 @@
                 {{ form.is_public.label(class="form-check-label") }}
                 <div class="form-text text-muted">Если выключено, группа видна только пользователям с явно выданным доступом</div>
             </div>
+
+            <hr>
+            <p class="fw-semibold mb-2">XRay Reality <span class="text-muted fw-normal small">(обход DPI / белых списков)</span></p>
+            <p class="text-muted small">Устанавливает XRay Reality фронтенд на HAProxy сервере. Клиенты подключаются через Reality (выглядит как HTTPS), трафик цепочкой идёт на XRay серверы группы.</p>
+
+            <div class="mb-3 form-check">
+                {{ form.reality_enabled(class="form-check-input", id="reality_enabled_cb") }}
+                {{ form.reality_enabled.label(class="form-check-label") }}
+            </div>
+
+            <div id="reality-fields">
+                <div class="mb-3">
+                    {{ form.reality_haproxy_server_id.label(class="form-label") }}
+                    {{ form.reality_haproxy_server_id(class="form-select") }}
+                    <div class="form-text">HAProxy сервер, на котором будет установлен XRay Reality контейнер</div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-md-4">
+                        {{ form.reality_port.label(class="form-label") }}
+                        {{ form.reality_port(class="form-control") }}
+                        <div class="form-text">Не должен совпадать с HAProxy XRay портом (обычно 443)</div>
+                    </div>
+                    <div class="col-md-8">
+                        {{ form.reality_sni.label(class="form-label") }}
+                        {{ form.reality_sni(class="form-control") }}
+                        <div class="form-text">Домен, под который маскируется трафик (должен быть разрешён в белом списке)</div>
+                    </div>
+                </div>
+                <div class="alert alert-warning small py-2">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Требуется: HAProxy XRay backend для этой группы на том же HAProxy сервере.
+                    Relay UUID будет добавлен на все XRay серверы группы автоматически.
+                </div>
+            </div>
+
+            {% if group and group.reality_enabled %}
+            <div class="alert alert-success small py-2 mb-3">
+                <i class="bi bi-check-circle"></i>
+                <strong>Reality активен:</strong>
+                порт {{ group.reality_port }}, SNI {{ group.reality_sni }}
+                {% if group.reality_haproxy_server %}
+                на {{ group.reality_haproxy_server.name }}
+                ({{ group.reality_haproxy_server.xray_status }})
+                {% endif %}
+            </div>
+            {% endif %}
+
             {{ form.submit(class="btn btn-primary") }}
             <a href="{{ url_for('groups.index') }}" class="btn btn-secondary">Отмена</a>
         </form>
     </div>
 </div>
+
+<script>
+(function () {
+    var cb = document.getElementById('reality_enabled_cb');
+    var fields = document.getElementById('reality-fields');
+
+    function toggle() {
+        fields.style.display = cb.checked ? '' : 'none';
+    }
+
+    toggle();
+    cb.addEventListener('change', toggle);
+}());
+</script>
 {% endblock %}

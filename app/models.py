@@ -29,10 +29,19 @@ class ServerGroup(db.Model):
     name = db.Column(db.String(64), unique=True, nullable=False)
     description = db.Column(db.String(255))
     is_public = db.Column(db.Boolean, default=True, nullable=False)
+
+    # XRay Reality per-group (обход DPI через HAProxy фронтенд)
+    reality_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    reality_port = db.Column(db.Integer, nullable=True)
+    reality_sni = db.Column(db.String(255), nullable=True, default='www.microsoft.com')
+    reality_haproxy_server_id = db.Column(db.Integer, db.ForeignKey('haproxy_servers.id'), nullable=True)
+    reality_relay_uuid = db.Column(db.String(36), nullable=True)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     servers = db.relationship('Server', backref='group', lazy=True)
     clients = db.relationship('Client', backref='group', lazy=True)
+    reality_haproxy_server = db.relationship('HaproxyServer', foreign_keys=[reality_haproxy_server_id])
 
 class Server(db.Model):
     __tablename__ = 'servers'
@@ -127,6 +136,12 @@ class HaproxyServer(db.Model):
     stats_socket_path = db.Column(db.String(255), default='/var/run/haproxy.sock')
     stats_port = db.Column(db.Integer, default=8404)  # для web статистики
     fornex_vps_id = db.Column(db.String(50), nullable=True)  # Order ID в Fornex, напр. "34-294241"
+
+    # XRay Reality (устанавливается на HAProxy для обхода DPI)
+    xray_public_key = db.Column(db.Text, nullable=True)
+    xray_private_key_encrypted = db.Column(db.Text, nullable=True)
+    xray_status = db.Column(db.String(20), nullable=True, default='not_installed')
+    # Значения: 'not_installed', 'installing', 'installed', 'error'
 
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

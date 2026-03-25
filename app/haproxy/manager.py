@@ -1,5 +1,7 @@
 import paramiko
 import time
+import json
+import re
 from io import StringIO
 from app.utils.crypto import decrypt_data
 from app.servers.ssh import parse_private_key
@@ -363,6 +365,192 @@ frontend {frontend_name}
     default_backend {backend.name}
 """
         return config
+
+    # -------------------------------------------------------------------------
+    # XRay Reality (устанавливается на HAProxy для обхода DPI)
+    # -------------------------------------------------------------------------
+
+    def install_xray_reality_base(self):
+        """Устанавливает XRay Reality Docker контейнер на HAProxy сервере и генерирует X25519 ключи.
+        Возвращает (success, public_key, private_key).
+        """
+        # Установить Docker если отсутствует
+        exit_code, _, _ = self._execute_ssh("command -v docker")
+        if exit_code != 0:
+            exit_code, out, err = self._execute_ssh(
+                "curl -fsSL https://get.docker.com | sudo sh"
+            )
+            if exit_code != 0:
+                return False, None, None
+
+        # Создать рабочую директорию
+        self._execute_ssh(
+            "sudo mkdir -p /opt/xray-reality && sudo chown $USER:$USER /opt/xray-reality"
+        )
+
+        # Сгенерировать X25519 ключи через Docker
+        exit_code, out, err = self._execute_ssh(
+            "sudo docker run --rm ghcr.io/xtls/xray-core:latest xray x25519"
+        )
+        if exit_code != 0:
+            return False, None, None
+
+        private_match = re.search(r'Private key:\s*(\S+)', out)
+        public_match = re.search(r'Public key:\s*(\S+)', out)
+        if not private_match or not public_match:
+            return False, None, None
+
+        private_key = private_match.group(1)
+        public_key = public_match.group(1)
+
+        # Записать начальный пустой конфиг
+        initial_config = json.dumps(
+            {"inbounds": [], "outbounds": [{"tag": "direct", "protocol": "freedom"}],
+             "routing": {"rules": []}},
+            indent=2
+        )
+        ok, err = self._sftp_write(initial_config, '/opt/xray-reality/config.json')
+        if not ok:
+            return False, None, None
+
+        # Записать docker-compose.yml
+        compose_content = (
+            "version: '3'\n"
+            "services:\n"
+            "  xray-reality:\n"
+            "    image: ghcr.io/xtls/xray-core:latest\n"
+            "    container_name: xray-reality\n"
+            "    restart: unless-stopped\n"
+            "    network_mode: host\n"
+            "    volumes:\n"
+            "      - ./config.json:/etc/xray/config.json\n"
+            "    command: run -c /etc/xray/config.json\n"
+        )
+        ok, err = self._sftp_write(compose_content, '/opt/xray-reality/docker-compose.yml')
+        if not ok:
+            return False, None, None
+
+        # Запустить контейнер
+        exit_code, out, err = self._execute_ssh(
+            "cd /opt/xray-reality && sudo docker compose up -d 2>&1 || "
+            "cd /opt/xray-reality && sudo docker-compose up -d 2>&1"
+        )
+        if exit_code != 0:
+            return False, None, None
+
+        return True, public_key, private_key
+
+    def update_xray_reality_config(self):
+        """Генерирует и деплоит XRay Reality конфиг для всех Reality-групп этого HAProxy.
+        Возвращает (success, message).
+        """
+        from app.models import ServerGroup, HaproxyBackend
+        from app.utils.crypto import decrypt_data as _decrypt
+
+        if not self.server.xray_private_key_encrypted:
+            return False, "XRay Reality не установлен (нет приватного ключа)"
+
+        private_key = _decrypt(self.server.xray_private_key_encrypted)
+
+        groups = ServerGroup.query.filter_by(
+            reality_enabled=True,
+            reality_haproxy_server_id=self.server.id
+        ).all()
+
+        inbounds = []
+        outbounds = []
+        rules = []
+
+        for group in groups:
+            if not group.reality_port or not group.reality_relay_uuid:
+                continue
+
+            # Клиентские UUID для inbound
+            client_entries = []
+            for c in group.clients:
+                if c.protocol_type == 'xray' and c.status == 'active' and c.extra_params:
+                    uid = c.extra_params.get('uuid')
+                    if uid:
+                        client_entries.append({
+                            'id': uid,
+                            'email': c.email or f"{c.name}@example.com",
+                            'flow': 'xtls-rprx-vision'
+                        })
+
+            # HAProxy XRay backend порт для этой группы на этом же сервере
+            backend = HaproxyBackend.query.filter_by(
+                protocol_type='xray',
+                group_id=group.id,
+                haproxy_server_id=self.server.id
+            ).first()
+            if not backend:
+                continue
+
+            sni = group.reality_sni or 'www.microsoft.com'
+            in_tag = f"g{group.id}-in"
+            out_tag = f"g{group.id}-out"
+
+            inbounds.append({
+                "tag": in_tag,
+                "port": group.reality_port,
+                "protocol": "vless",
+                "settings": {
+                    "clients": client_entries,
+                    "decryption": "none"
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "show": False,
+                        "dest": f"{sni}:443",
+                        "xver": 0,
+                        "serverNames": [sni],
+                        "privateKey": private_key,
+                        "shortIds": [""]
+                    }
+                }
+            })
+
+            outbounds.append({
+                "tag": out_tag,
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": "127.0.0.1",
+                        "port": backend.port,
+                        "users": [{"id": group.reality_relay_uuid, "encryption": "none"}]
+                    }]
+                },
+                "streamSettings": {"network": "tcp", "security": "none"}
+            })
+
+            rules.append({
+                "type": "field",
+                "inboundTag": [in_tag],
+                "outboundTag": out_tag
+            })
+
+        # Дефолтный freedom outbound (fallback)
+        outbounds.append({"tag": "direct", "protocol": "freedom"})
+
+        config = {
+            "inbounds": inbounds,
+            "outbounds": outbounds,
+            "routing": {"domainStrategy": "AsIs", "rules": rules}
+        }
+
+        config_json = json.dumps(config, indent=2, ensure_ascii=False)
+        ok, err = self._sftp_write(config_json, '/opt/xray-reality/config.json')
+        if not ok:
+            return False, f"Ошибка записи конфига: {err}"
+
+        # Перезагрузить XRay Reality
+        self._execute_ssh(
+            "sudo docker exec xray-reality kill -HUP 1 2>/dev/null || "
+            "sudo docker restart xray-reality 2>/dev/null || true"
+        )
+        return True, "XRay Reality конфиг обновлён"
 
     def ensure_haproxy_installed(self):
         """Проверяет, установлен ли HAProxy, и устанавливает при необходимости"""

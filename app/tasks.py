@@ -1,5 +1,5 @@
 from app.celery_app import celery
-from app.models import Client, Server, ServerProtocol, ServerStats, TrafficStats, ApiToken, HaproxyServer, HaproxyStats, FornexSetting
+from app.models import Client, Server, ServerProtocol, ServerStats, TrafficStats, ApiToken, HaproxyServer, HaproxyStats, FornexSetting, ServerGroup
 from app.extensions import db
 from app.servers.ssh import execute_ssh_command
 from app.utils.crypto import decrypt_data
@@ -556,6 +556,93 @@ def uninstall_protocol_task(self, protocol_id):
 
 
 @celery.task(bind=True)
+def enable_group_reality_task(self, group_id, port, sni, haproxy_server_id):
+    """Включает XRay Reality для группы: устанавливает контейнер на HAProxy (если нужно),
+    генерирует relay UUID, добавляет его на abroad XRay серверы, деплоит конфиг."""
+    import uuid as uuid_module
+    from app.haproxy.manager import HaproxyManager
+    from app.clients.utils import apply_relay_uuid_to_group_servers
+    from app.utils.crypto import encrypt_data
+
+    group = ServerGroup.query.get(group_id)
+    haproxy_server = HaproxyServer.query.get(haproxy_server_id)
+    if not group or not haproxy_server:
+        return "Group or HAProxy server not found"
+
+    manager = HaproxyManager(haproxy_server)
+
+    # Установить XRay Reality если ещё не установлен
+    if haproxy_server.xray_status != 'installed':
+        haproxy_server.xray_status = 'installing'
+        db.session.commit()
+
+        success, public_key, private_key = manager.install_xray_reality_base()
+        if not success:
+            haproxy_server.xray_status = 'error'
+            db.session.commit()
+            logger.error(f"Failed to install XRay Reality on HAProxy {haproxy_server.name}")
+            return "Failed to install XRay Reality"
+
+        haproxy_server.xray_public_key = public_key
+        haproxy_server.xray_private_key_encrypted = encrypt_data(private_key)
+        haproxy_server.xray_status = 'installed'
+        db.session.commit()
+
+    # Сохранить Reality настройки для группы
+    relay_uuid = str(uuid_module.uuid4())
+    group.reality_relay_uuid = relay_uuid
+    group.reality_enabled = True
+    group.reality_port = port
+    group.reality_sni = sni
+    group.reality_haproxy_server_id = haproxy_server_id
+    db.session.commit()
+
+    # Добавить relay UUID на все XRay серверы группы
+    try:
+        apply_relay_uuid_to_group_servers(group, relay_uuid)
+    except Exception as e:
+        logger.error(f"Error applying relay UUID to group {group.name} servers: {e}")
+
+    # Обновить конфиг XRay Reality на HAProxy
+    try:
+        success, message = manager.update_xray_reality_config()
+        if not success:
+            logger.error(f"Failed to update XRay Reality config for group {group.name}: {message}")
+    except Exception as e:
+        logger.error(f"Exception updating XRay Reality config: {e}")
+
+    return f"Reality enabled for group {group.name}"
+
+
+@celery.task(bind=True)
+def disable_group_reality_task(self, group_id):
+    """Отключает XRay Reality для группы и обновляет конфиг на HAProxy."""
+    from app.haproxy.manager import HaproxyManager
+
+    group = ServerGroup.query.get(group_id)
+    if not group:
+        return "Group not found"
+
+    haproxy_server_id = group.reality_haproxy_server_id
+
+    group.reality_enabled = False
+    group.reality_port = None
+    group.reality_relay_uuid = None
+    group.reality_haproxy_server_id = None
+    db.session.commit()
+
+    if haproxy_server_id:
+        haproxy_server = HaproxyServer.query.get(haproxy_server_id)
+        if haproxy_server and haproxy_server.xray_status == 'installed':
+            try:
+                HaproxyManager(haproxy_server).update_xray_reality_config()
+            except Exception as e:
+                logger.error(f"Error updating XRay Reality config on disable: {e}")
+
+    return f"Reality disabled for group {group.name if group else group_id}"
+
+
+@celery.task(bind=True)
 def apply_client_task(self, client_id):
     """Асинхронная задача применения клиента на сервере или группе серверов"""
     from app.clients.utils import apply_client_to_server
@@ -606,6 +693,18 @@ def apply_client_task(self, client_id):
         if success_count > 0:
             client.status = 'active'
             db.session.commit()
+
+        # Если группа с Reality — обновить конфиг XRay Reality на HAProxy
+        if client.group and client.group.reality_enabled and client.group.reality_haproxy_server_id:
+            try:
+                from app.haproxy.manager import HaproxyManager
+                hs = HaproxyServer.query.get(client.group.reality_haproxy_server_id)
+                if hs and hs.xray_status == 'installed':
+                    HaproxyManager(hs).update_xray_reality_config()
+            except Exception as e:
+                logger.warning(f"Failed to update Reality config after applying client {client_id}: {e}")
+
+        if success_count > 0:
             return f"Successfully applied to {success_count}/{len(servers)} servers"
         return "Failed to apply to any server in group"
 
@@ -636,6 +735,11 @@ def remove_client_task(self, client_id, delete_from_db=True):
 
     # Групповой клиент — удаляем со всех серверов группы
     if client.group_id and not client.server_id:
+        reality_haproxy_server_id = (
+            client.group.reality_haproxy_server_id
+            if client.group and client.group.reality_enabled else None
+        )
+
         if client.group and client.group.servers:
             for server in client.group.servers:
                 protocol = ServerProtocol.query.filter_by(
@@ -662,6 +766,17 @@ def remove_client_task(self, client_id, delete_from_db=True):
         if delete_from_db:
             db.session.delete(client)
             db.session.commit()
+
+        # Обновить Reality конфиг (клиент больше не должен быть в inbound)
+        if reality_haproxy_server_id:
+            try:
+                from app.haproxy.manager import HaproxyManager
+                hs = HaproxyServer.query.get(reality_haproxy_server_id)
+                if hs and hs.xray_status == 'installed':
+                    HaproxyManager(hs).update_xray_reality_config()
+            except Exception as e:
+                logger.warning(f"Failed to update Reality config after removing client {client_id}: {e}")
+
         return "Success"
 
     if not client.server:
