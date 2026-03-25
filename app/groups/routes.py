@@ -16,7 +16,8 @@ def index():
 def create():
     form = GroupForm()
     if form.validate_on_submit():
-        group = ServerGroup(name=form.name.data, description=form.description.data)
+        group = ServerGroup(name=form.name.data, description=form.description.data,
+                            is_public=form.is_public.data)
         db.session.add(group)
         db.session.commit()
         flash(f'Группа {group.name} создана', 'success')
@@ -31,6 +32,7 @@ def edit(id):
     if form.validate_on_submit():
         group.name = form.name.data
         group.description = form.description.data
+        group.is_public = form.is_public.data
         db.session.commit()
         flash('Группа обновлена', 'success')
         return redirect(url_for('groups.index'))

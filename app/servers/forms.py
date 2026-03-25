@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, IntegerField, PasswordField, TextAreaField, SubmitField, SelectField
+from wtforms import StringField, IntegerField, PasswordField, TextAreaField, SubmitField, SelectField, BooleanField
 from wtforms.validators import DataRequired, IPAddress, NumberRange, Optional
 
 class ServerForm(FlaskForm):
@@ -10,4 +10,5 @@ class ServerForm(FlaskForm):
     ssh_username = StringField('SSH пользователь', validators=[DataRequired()])
     ssh_key = TextAreaField('Приватный SSH ключ', validators=[DataRequired()], description='Начиная с "-----BEGIN..."')
     ssh_key_passphrase = PasswordField('Пароль от ключа (если есть)', validators=[Optional()])
+    is_public = BooleanField('Публичный сервер', default=True)
     submit = SubmitField('Сохранить')

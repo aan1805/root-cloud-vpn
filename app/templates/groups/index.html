@@ -12,6 +12,7 @@
             <th>ID</th>
             <th>Название</th>
             <th>Описание</th>
+            <th>Видимость</th>
             <th>Серверов</th>
             <th>Клиентов</th>
             <th>Действия</th>
@@ -23,6 +24,13 @@
             <td>{{ group.id }}</td>
             <td>{{ group.name }}</td>
             <td>{{ group.description }}</td>
+            <td>
+                {% if group.is_public %}
+                    <span class="badge bg-success">Публичная</span>
+                {% else %}
+                    <span class="badge bg-secondary">Приватная</span>
+                {% endif %}
+            </td>
             <td><span class="badge bg-info">{{ group.servers|length }}</span></td>
             <td><span class="badge bg-secondary">{{ group.clients|length }}</span></td>
             <td>

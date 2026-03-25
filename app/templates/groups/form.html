@@ -15,6 +15,11 @@
                 {{ form.description.label(class="form-label") }}
                 {{ form.description(class="form-control") }}
             </div>
+            <div class="mb-3 form-check">
+                {{ form.is_public(class="form-check-input") }}
+                {{ form.is_public.label(class="form-check-label") }}
+                <div class="form-text text-muted">Если выключено, группа видна только пользователям с явно выданным доступом</div>
+            </div>
             {{ form.submit(class="btn btn-primary") }}
             <a href="{{ url_for('groups.index') }}" class="btn btn-secondary">Отмена</a>
         </form>

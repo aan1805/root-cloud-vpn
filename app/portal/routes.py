@@ -99,16 +99,26 @@ def _get_portal_user():
     return user
 
 
-def _available_options():
-    """Возвращает серверы и группы с установленными протоколами."""
+def _available_options(user=None):
+    """Возвращает серверы и группы с установленными протоколами с учётом видимости."""
+    allowed_server_ids = set()
+    allowed_group_ids = set()
+    if user:
+        allowed_server_ids = {s.id for s in user.allowed_servers}
+        allowed_group_ids = {g.id for g in user.allowed_groups}
+
     servers = []
     for s in Server.query.filter_by(status='online').all():
+        if not s.is_public and s.id not in allowed_server_ids:
+            continue
         protos = [p.protocol_type for p in s.protocols if p.status == 'installed']
         if protos:
             servers.append({'obj': s, 'protocols': protos})
 
     groups = []
     for g in ServerGroup.query.all():
+        if not g.is_public and g.id not in allowed_group_ids:
+            continue
         protos = set()
         for s in g.servers:
             for p in s.protocols:
@@ -141,9 +151,14 @@ def create_client():
     if not user:
         return redirect(url_for('portal.login'))
 
-    servers, groups = _available_options()
+    servers, groups = _available_options(user)
 
     if request.method == 'POST':
+        # Проверяем лимит клиентов
+        if user.client_limit > 0 and user.clients.count() >= user.client_limit:
+            flash(f'Достигнут лимит клиентов ({user.client_limit}). Обратитесь к администратору.', 'danger')
+            return render_template('portal/create.html', user=user, servers=servers, groups=groups)
+
         target_type = request.form.get('target_type')  # 'server' or 'group'
         target_id = request.form.get('target_id', type=int)
         protocol_type = request.form.get('protocol_type')

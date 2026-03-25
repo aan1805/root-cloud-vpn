@@ -41,6 +41,11 @@
         {{ form.ssh_key_passphrase(class="form-control") }}
         {% if form.ssh_key_passphrase.errors %}<div class="text-danger">{{ form.ssh_key_passphrase.errors[0] }}</div>{% endif %}
     </div>
+    <div class="mb-3 form-check">
+        {{ form.is_public(class="form-check-input") }}
+        {{ form.is_public.label(class="form-check-label") }}
+        <div class="form-text text-muted">Если выключено, сервер виден только пользователям с явно выданным доступом</div>
+    </div>
     <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
     <a href="{{ url_for('servers.index') }}" class="btn btn-secondary">Отмена</a>
 </form>

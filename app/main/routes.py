@@ -141,6 +141,35 @@ def fornex_settings():
                            servers=servers, haproxy_servers=haproxy_servers)
 
 
+@bp.route('/settings/oidc-users/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_oidc_user(id):
+    user = OIDCUser.query.get_or_404(id)
+    all_servers = Server.query.order_by(Server.name).all()
+    all_groups = ServerGroup.query.order_by(ServerGroup.name).all()
+
+    if request.method == 'POST':
+        client_limit = request.form.get('client_limit', 0, type=int)
+        user.client_limit = max(0, client_limit)
+
+        allowed_server_ids = request.form.getlist('allowed_server_ids')
+        allowed_server_ids = [int(x) for x in allowed_server_ids if x.isdigit()]
+        user.allowed_servers = Server.query.filter(Server.id.in_(allowed_server_ids)).all() if allowed_server_ids else []
+
+        allowed_group_ids = request.form.getlist('allowed_group_ids')
+        allowed_group_ids = [int(x) for x in allowed_group_ids if x.isdigit()]
+        user.allowed_groups = ServerGroup.query.filter(ServerGroup.id.in_(allowed_group_ids)).all() if allowed_group_ids else []
+
+        db.session.commit()
+        flash('Настройки пользователя сохранены.', 'success')
+        return redirect(url_for('main.oidc_users'))
+
+    private_servers = [s for s in all_servers if not s.is_public]
+    private_groups = [g for g in all_groups if not g.is_public]
+    return render_template('settings/oidc_user_edit.html', user=user,
+                           private_servers=private_servers, private_groups=private_groups)
+
+
 @bp.route('/settings/oidc-users/<int:id>/delete', methods=['POST'])
 @login_required
 def delete_oidc_user(id):

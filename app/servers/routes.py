@@ -46,6 +46,7 @@ def create():
             ssh_username=username,
             ssh_key_encrypted=encrypted_key,
             ssh_key_passphrase_encrypted=encrypted_passphrase,
+            is_public=form.is_public.data,
             status='online'  # после успешной проверки считаем онлайн
         )
         db.session.add(server)
@@ -88,6 +89,7 @@ def edit(id):
         server.ip = ip
         server.ssh_port = port
         server.ssh_username = username
+        server.is_public = form.is_public.data
         # статус проверим позже в фоновой задаче, пока оставляем
         db.session.commit()
         flash('Сервер обновлен', 'success')

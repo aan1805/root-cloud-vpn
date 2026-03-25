@@ -29,6 +29,17 @@
                     —
                 {% endif %}
             </small>
+            <div class="text-center">
+                <small class="text-muted d-block">Лимит клиентов</small>
+                {% if user.client_limit > 0 %}
+                    <span class="badge bg-warning text-dark">{{ user.clients.count() }} / {{ user.client_limit }}</span>
+                {% else %}
+                    <span class="badge bg-secondary">{{ user.clients.count() }} / ∞</span>
+                {% endif %}
+            </div>
+            <a href="{{ url_for('main.edit_oidc_user', id=user.id) }}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-gear"></i>
+            </a>
             <button class="btn btn-sm btn-outline-danger"
                     data-bs-toggle="modal"
                     data-bs-target="#deleteModal{{ user.id }}">

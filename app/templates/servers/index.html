@@ -14,6 +14,7 @@
             <th>IP:Порт</th>
             <th>Пользователь</th>
             <th>Статус</th>
+            <th>Видимость</th>
             <th>Действия</th>
         </tr>
     </thead>
@@ -34,6 +35,13 @@
                 {% endif %}
             </td>
             <td>
+                {% if server.is_public %}
+                    <span class="badge bg-success">Публичный</span>
+                {% else %}
+                    <span class="badge bg-secondary">Приватный</span>
+                {% endif %}
+            </td>
+            <td>
                 <a href="{{ url_for('servers.check_status', id=server.id) }}" class="btn btn-sm btn-info">Проверить</a>
                 <a href="{{ url_for('protocols.index', server_id=server.id) }}" class="btn btn-sm btn-primary">Протоколы</a>
                 <a href="{{ url_for('servers.edit', id=server.id) }}" class="btn btn-sm btn-warning">Редактировать</a>
@@ -44,7 +52,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="6" class="text-center">Нет добавленных серверов</td>
+            <td colspan="7" class="text-center">Нет добавленных серверов</td>
         </tr>
         {% endfor %}
     </tbody>

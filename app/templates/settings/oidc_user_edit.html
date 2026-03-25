@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1><i class="bi bi-person-gear"></i> Настройки пользователя</h1>
+    <a href="{{ url_for('main.oidc_users') }}" class="btn btn-secondary">
+        <i class="bi bi-arrow-left"></i> Назад
+    </a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">
+        <strong>{{ user.name or user.email or user.sub }}</strong>
+        {% if user.email and user.name %}<span class="text-muted ms-2">{{ user.email }}</span>{% endif %}
+    </div>
+    <div class="card-body">
+        <form method="POST">
+
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Лимит клиентов</label>
+                <input type="number" name="client_limit" class="form-control" style="max-width: 200px;"
+                       value="{{ user.client_limit }}" min="0" step="1">
+                <div class="form-text">0 — без ограничений. Текущее количество: <strong>{{ user.clients.count() }}</strong></div>
+            </div>
+
+            {% if private_servers %}
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Доступ к приватным серверам</label>
+                <div class="form-text mb-2">Отмеченные серверы будут доступны пользователю несмотря на их статус «приватный»</div>
+                {% set user_server_ids = user.allowed_servers | map(attribute='id') | list %}
+                <div class="row">
+                    {% for server in private_servers %}
+                    <div class="col-md-4 col-sm-6 mb-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="allowed_server_ids"
+                                   value="{{ server.id }}" id="srv_{{ server.id }}"
+                                   {% if server.id in user_server_ids %}checked{% endif %}>
+                            <label class="form-check-label" for="srv_{{ server.id }}">
+                                <i class="bi bi-server"></i> {{ server.name }}
+                                <small class="text-muted">({{ server.ip }})</small>
+                            </label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% else %}
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Доступ к приватным серверам</label>
+                <p class="text-muted">Нет приватных серверов. Отметьте сервер как «непубличный» в его настройках.</p>
+            </div>
+            {% endif %}
+
+            {% if private_groups %}
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Доступ к приватным группам</label>
+                <div class="form-text mb-2">Отмеченные группы будут доступны пользователю несмотря на их статус «приватный»</div>
+                {% set user_group_ids = user.allowed_groups | map(attribute='id') | list %}
+                <div class="row">
+                    {% for group in private_groups %}
+                    <div class="col-md-4 col-sm-6 mb-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="allowed_group_ids"
+                                   value="{{ group.id }}" id="grp_{{ group.id }}"
+                                   {% if group.id in user_group_ids %}checked{% endif %}>
+                            <label class="form-check-label" for="grp_{{ group.id }}">
+                                <i class="bi bi-diagram-3"></i> {{ group.name }}
+                            </label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% else %}
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Доступ к приватным группам</label>
+                <p class="text-muted">Нет приватных групп. Отметьте группу как «непубличную» в её настройках.</p>
+            </div>
+            {% endif %}
+
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i> Сохранить
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

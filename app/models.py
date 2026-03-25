@@ -28,6 +28,7 @@ class ServerGroup(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(64), unique=True, nullable=False)
     description = db.Column(db.String(255))
+    is_public = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     servers = db.relationship('Server', backref='group', lazy=True)
@@ -45,6 +46,7 @@ class Server(db.Model):
     ssh_key_encrypted = db.Column(db.Text, nullable=True)  # зашифрованный приватный ключ
     ssh_key_passphrase_encrypted = db.Column(db.Text, nullable=True)  # если ключ с паролем
     status = db.Column(db.String(20), default='unknown')  # online, offline, unknown
+    is_public = db.Column(db.Boolean, default=True, nullable=False)
     fornex_vps_id = db.Column(db.String(50), nullable=True)  # Order ID в Fornex, напр. "34-294241"
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
@@ -185,6 +187,18 @@ class TrafficStats(db.Model):
 
     __table_args__ = (db.UniqueConstraint('client_id', 'date', name='unique_client_date'),)
 
+# M2M: доступ конкретных пользователей к приватным серверам/группам
+oidc_user_servers = db.Table('oidc_user_servers',
+    db.Column('oidc_user_id', db.Integer, db.ForeignKey('oidc_users.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('server_id', db.Integer, db.ForeignKey('servers.id', ondelete='CASCADE'), primary_key=True)
+)
+
+oidc_user_groups = db.Table('oidc_user_groups',
+    db.Column('oidc_user_id', db.Integer, db.ForeignKey('oidc_users.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('group_id', db.Integer, db.ForeignKey('server_groups.id', ondelete='CASCADE'), primary_key=True)
+)
+
+
 class OIDCUser(db.Model):
     __tablename__ = 'oidc_users'
 
@@ -195,9 +209,12 @@ class OIDCUser(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
     refresh_token_encrypted = db.Column(db.Text, nullable=True)
+    client_limit = db.Column(db.Integer, default=0)  # 0 = безлимит
 
     clients = db.relationship('Client', backref='oidc_user', lazy='dynamic',
                               foreign_keys='Client.oidc_user_id')
+    allowed_servers = db.relationship('Server', secondary=oidc_user_servers, lazy='subquery')
+    allowed_groups = db.relationship('ServerGroup', secondary=oidc_user_groups, lazy='subquery')
 
 
 class OIDCSetting(db.Model):
