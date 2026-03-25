@@ -268,41 +268,46 @@ def remove_client_from_server(client):
     return False, f"Неподдерживаемый протокол: {protocol.protocol_type}"
 
 
-def generate_client_config(client):
-    """Генерирует конфигурационный файл для клиента"""
-    from flask import current_app
-    # Определяем адрес подключения (Endpoint)
+def resolve_client_endpoint(client):
+    """Возвращает (address, port) для клиента с учётом HAProxy и групповых клиентов."""
     connection_address = client.server.ip if client.server else None
     connection_port = client.protocol.port if client.protocol else None
 
     if client.group_id:
         from app.models import HaproxyBackend
-        # Сначала ищем бэкенд для конкретной группы клиента, затем бэкенд без группы (все серверы)
+        proto_type = client.protocol_type
         backend = HaproxyBackend.query.filter_by(
-            protocol_type=client.protocol_type,
+            protocol_type=proto_type,
             group_id=client.group_id
         ).first()
         if not backend:
             backend = HaproxyBackend.query.filter_by(
-                protocol_type=client.protocol_type,
+                protocol_type=proto_type,
                 group_id=None
             ).first()
-        if backend:
+        if backend and backend.haproxy_server:
             connection_address = backend.haproxy_server.ip
             connection_port = backend.port
-        else:
-            # Нет HAProxy — используем IP/порт первого подходящего сервера группы напрямую
-            if client.group and client.group.servers:
-                for srv in client.group.servers:
-                    proto = next(
-                        (p for p in srv.protocols
-                         if p.protocol_type == client.protocol_type and p.status == 'installed'),
-                        None
-                    )
-                    if proto:
-                        connection_address = srv.ip
-                        connection_port = proto.port
-                        break
+        elif client.group and client.group.servers:
+            for srv in client.group.servers:
+                proto = next(
+                    (p for p in srv.protocols
+                     if p.protocol_type == proto_type and p.status == 'installed'),
+                    None
+                )
+                if proto:
+                    connection_address = srv.ip
+                    connection_port = proto.port
+                    break
+
+    return connection_address, connection_port
+
+
+def generate_client_config(client):
+    """Генерирует конфигурационный файл для клиента"""
+    from flask import current_app
+
+    connection_address, connection_port = resolve_client_endpoint(client)
 
     current_app.logger.info(
         f"generate_client_config: client={client.id} proto={client.protocol_type} "

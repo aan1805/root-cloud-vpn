@@ -3,7 +3,7 @@ from app.portal import bp
 from app.models import OIDCSetting, OIDCUser, Client, ServerProtocol, Server, ServerGroup
 from app.extensions import db
 from app.utils.crypto import decrypt_data, encrypt_data
-from app.clients.utils import generate_keys_for_client, generate_client_config, generate_amnezia_export_json
+from app.clients.utils import generate_keys_for_client, generate_client_config, generate_amnezia_export_json, resolve_client_endpoint
 from app.tasks import apply_client_task
 from datetime import datetime
 import functools
@@ -374,28 +374,8 @@ def config_text(client_id):
 
     try:
         if proto_type == 'awg':
-            # AmneziaVPN ожидает JSON-экспорт при сканировании QR
-            from app.clients.utils import _get_awg_params
-            # Определяем endpoint (та же логика что в generate_client_config)
-            connection_address = client.server.ip if client.server else None
-            connection_port = client.protocol.port if client.protocol else None
-            if client.group_id:
-                from app.models import HaproxyBackend
-                backend = HaproxyBackend.query.filter_by(
-                    protocol_type='awg', group_id=client.group_id).first() or \
-                    HaproxyBackend.query.filter_by(protocol_type='awg', group_id=None).first()
-                if backend:
-                    connection_address = backend.haproxy_server.ip
-                    connection_port = backend.port
-                elif client.group and client.group.servers:
-                    for srv in client.group.servers:
-                        proto = next((p for p in srv.protocols
-                                      if p.protocol_type == 'awg' and p.status == 'installed'), None)
-                        if proto:
-                            connection_address = srv.ip
-                            connection_port = proto.port
-                            break
-            if not connection_address:
+            connection_address, connection_port = resolve_client_endpoint(client)
+            if not connection_address or not connection_port:
                 return Response('', mimetype='text/plain', status=404)
             text = generate_amnezia_export_json(client, connection_address, connection_port)
         else:

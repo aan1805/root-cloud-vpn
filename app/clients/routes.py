@@ -214,41 +214,53 @@ def apply_to_server(id):
 @bp.route('/<int:id>/config')
 @login_required
 def download_config(id):
+    from flask import Response, current_app
     client = Client.query.get_or_404(id)
-    config = generate_client_config(client)
 
-    if not config:
-        flash('Не удалось сгенерировать конфиг. Убедитесь, что клиент активен и ключи сгенерированы.', 'danger')
+    try:
+        config = generate_client_config(client)
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"download_config error for client {id}: {e}\n{traceback.format_exc()}")
+        flash(f'Ошибка генерации конфига: {e}', 'danger')
         return redirect(url_for('clients.view', id=id))
 
-    # Отдаём как файл
-    from flask import Response
-    filename = f"{client.name}.vpn"
-    mimetype = 'text/plain'
+    if not config:
+        flash('Не удалось сгенерировать конфиг. Убедитесь, что клиент активен, ключи сгенерированы и сервер/группа доступны.', 'danger')
+        return redirect(url_for('clients.view', id=id))
 
+    from urllib.parse import quote
+    filename = f"{client.name}.conf"
+    filename_encoded = quote(filename, safe='')
     return Response(
         config,
-        mimetype=mimetype,
-        headers={'Content-Disposition': f'attachment; filename={filename}'}
+        mimetype='text/plain',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{filename_encoded}"}
     )
 
 
 @bp.route('/<int:id>/config-text')
 @login_required
 def config_text(id):
-    from flask import Response
-    from app.clients.utils import generate_amnezia_export_json
+    from flask import Response, current_app
+    from app.clients.utils import generate_amnezia_export_json, resolve_client_endpoint
     client = Client.query.get_or_404(id)
     proto_type = client.protocol_type or (client.protocol.protocol_type if client.protocol else None)
-    if proto_type == 'awg':
-        config = generate_client_config(client)
-        if not config:
-            abort(404)
-        connection_address = client.server.ip if client.server else None
-        connection_port = client.protocol.port if client.protocol else None
-        text = generate_amnezia_export_json(client, connection_address, connection_port)
-    else:
-        text = generate_client_config(client)
+
+    try:
+        if proto_type == 'awg':
+            connection_address, connection_port = resolve_client_endpoint(client)
+            if not connection_address or not connection_port:
+                current_app.logger.warning(f"config_text: no endpoint for client {client.id}")
+                abort(404)
+            text = generate_amnezia_export_json(client, connection_address, connection_port)
+        else:
+            text = generate_client_config(client)
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"config_text error for client {id}: {e}\n{traceback.format_exc()}")
+        abort(500)
+
     if not text:
         abort(404)
     return Response(text, mimetype='text/plain')
