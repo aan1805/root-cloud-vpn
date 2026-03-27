@@ -1,7 +1,7 @@
 """Fix traffic stats: add cumulative_rx/tx columns for correct daily delta calculation
 
 Revision ID: a7b8c9d0e1f2
-Revises: b2c3d4e5f6a7
+Revises: f6a7b8c9d0e1
 Create Date: 2026-03-27 12:00:00.000000
 
 """
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'a7b8c9d0e1f2'
-down_revision = 'b2c3d4e5f6a7'
+revision = 'a7b8c9d0e1f3'
+down_revision = 'f6a7b8c9d0e1'
 branch_labels = None
 depends_on = None
 
