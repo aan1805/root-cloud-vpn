@@ -280,23 +280,42 @@ def collect_detailed_wg_stats(self, server_id):
 
                 if client:
                     # Сохраняем статистику за сегодня
+                    # rx_bytes/tx_bytes — накопительные счётчики WireGuard (с момента старта интерфейса),
+                    # поэтому сохраняем дельту (разницу с предыдущим днём), а не абсолютное значение
                     today = date.today()
                     stats = TrafficStats.query.filter_by(
                         client_id=client.id,
                         date=today
                     ).first()
 
+                    # Находим предыдущий накопительный baseline (последняя запись до сегодня)
+                    prev_stats = TrafficStats.query.filter(
+                        TrafficStats.client_id == client.id,
+                        TrafficStats.date < today
+                    ).order_by(TrafficStats.date.desc()).first()
+
+                    baseline_rx = prev_stats.cumulative_rx if prev_stats else rx_bytes
+                    baseline_tx = prev_stats.cumulative_tx if prev_stats else tx_bytes
+
+                    # Дельта за день (защита от сброса счётчика при перезапуске WG)
+                    delta_rx = max(0, rx_bytes - baseline_rx)
+                    delta_tx = max(0, tx_bytes - baseline_tx)
+
                     if not stats:
                         stats = TrafficStats(
                             client_id=client.id,
                             date=today,
-                            bytes_received=rx_bytes,
-                            bytes_sent=tx_bytes
+                            bytes_received=delta_rx,
+                            bytes_sent=delta_tx,
+                            cumulative_rx=rx_bytes,
+                            cumulative_tx=tx_bytes
                         )
                         db.session.add(stats)
                     else:
-                        stats.bytes_received = rx_bytes
-                        stats.bytes_sent = tx_bytes
+                        stats.bytes_received = delta_rx
+                        stats.bytes_sent = delta_tx
+                        stats.cumulative_rx = rx_bytes
+                        stats.cumulative_tx = tx_bytes
 
                     # Обновляем общий счётчик у клиента
                     client.traffic_used_bytes = rx_bytes + tx_bytes

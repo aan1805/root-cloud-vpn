@@ -194,8 +194,10 @@ class TrafficStats(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey('clients.id', ondelete='CASCADE'), nullable=False)
     date = db.Column(db.Date, nullable=False)
-    bytes_sent = db.Column(db.BigInteger, default=0)  # исходящий трафик (tx)
-    bytes_received = db.Column(db.BigInteger, default=0)  # входящий трафик (rx)
+    bytes_sent = db.Column(db.BigInteger, default=0)  # исходящий трафик за день (дельта, tx)
+    bytes_received = db.Column(db.BigInteger, default=0)  # входящий трафик за день (дельта, rx)
+    cumulative_tx = db.Column(db.BigInteger, default=0)  # накопительный счётчик WG на конец дня (tx)
+    cumulative_rx = db.Column(db.BigInteger, default=0)  # накопительный счётчик WG на конец дня (rx)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     client = db.relationship('Client', backref=db.backref('stats', lazy='dynamic', cascade='all, delete-orphan'))
