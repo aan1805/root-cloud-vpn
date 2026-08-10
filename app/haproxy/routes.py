@@ -2,10 +2,11 @@ from flask import render_template, redirect, url_for, flash, request, abort, jso
 from flask_login import login_required
 from app.haproxy import bp
 from app.haproxy.manager import HaproxyManager
-from app.haproxy.forms import HaproxyServerForm, HaproxyBackendForm
+from app.haproxy.forms import HaproxyServerForm, HaproxyServerEditForm, HaproxyBackendForm
 from app.models import HaproxyServer, HaproxyBackend, Server, ServerProtocol
 from app.extensions import db
-from app.utils.crypto import encrypt_data
+from app.utils.crypto import encrypt_data, decrypt_data
+from app.servers.ssh import test_ssh_connection
 
 
 @bp.route('/')
@@ -55,7 +56,77 @@ def add_server():
             flash(message, 'danger')
         return redirect(url_for('haproxy.index'))
 
-    return render_template('haproxy/add_server.html', form=form)
+    return render_template(
+        'haproxy/server_form.html',
+        form=form,
+        title='Добавление HAProxy сервера',
+        submit_label='Добавить',
+        cancel_url=url_for('haproxy.index'),
+    )
+
+
+@bp.route('/servers/<int:server_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_server(server_id):
+    """Редактирование HAProxy сервера"""
+    server = HaproxyServer.query.get_or_404(server_id)
+    form = HaproxyServerEditForm(obj=server)
+
+    if form.validate_on_submit():
+        server.name = form.name.data
+        server.ip = form.ip.data
+        server.endpoint_domain = (form.endpoint_domain.data or '').strip() or None
+        server.port = form.ssh_port.data
+        server.ssh_username = form.ssh_username.data
+        server.config_path = form.config_path.data
+        server.stats_socket_path = form.stats_socket_path.data
+        server.stats_port = form.stats_port.data
+
+        # Пустое поле ключа означает «оставить прежний»
+        new_key = (form.ssh_key.data or '').strip()
+        if new_key:
+            server.ssh_key_encrypted = encrypt_data(new_key)
+            server.ssh_key_passphrase_encrypted = (
+                encrypt_data(form.ssh_key_passphrase.data)
+                if form.ssh_key_passphrase.data else None
+            )
+
+        db.session.commit()
+
+        # Проверяем доступность, но не блокируем сохранение: иначе нельзя было бы
+        # исправить как раз тот неверный IP или порт, из-за которого связь и пропала.
+        try:
+            key = decrypt_data(server.ssh_key_encrypted)
+            passphrase = (
+                decrypt_data(server.ssh_key_passphrase_encrypted)
+                if server.ssh_key_passphrase_encrypted else None
+            )
+            ok, error = test_ssh_connection(
+                server.ip, server.port, server.ssh_username, key, passphrase
+            )
+        except Exception as e:
+            ok, error = False, str(e)
+
+        if ok:
+            flash('Сервер обновлён, SSH-подключение проверено', 'success')
+        else:
+            flash(f'Сервер сохранён, но SSH-подключение не удалось: {error}', 'warning')
+        return redirect(url_for('haproxy.view_server', server_id=server.id))
+
+    if request.method == 'GET':
+        # Имя поля формы (ssh_port) не совпадает с полем модели (port),
+        # поэтому obj=server его не заполняет
+        form.ssh_port.data = server.port
+        # Существующий ключ не показываем — он зашифрован и не нужен в форме
+        form.ssh_key.data = ''
+
+    return render_template(
+        'haproxy/server_form.html',
+        form=form,
+        title=f'Редактирование: {server.name}',
+        submit_label='Сохранить',
+        cancel_url=url_for('haproxy.view_server', server_id=server.id),
+    )
 
 
 @bp.route('/servers/<int:server_id>')

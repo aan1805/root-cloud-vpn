@@ -18,6 +18,19 @@ class HaproxyServerForm(FlaskForm):
     stats_socket_path = StringField('Путь к stats socket', default='/var/run/haproxy.sock')
     stats_port = IntegerField('Порт статистики', default=8404)
 
+
+class HaproxyServerEditForm(HaproxyServerForm):
+    """
+    Форма редактирования. Отличается от формы добавления только тем, что SSH-ключ
+    необязателен: он уже сохранён в БД, а показывать его в форме нельзя.
+    Пустое поле означает «оставить прежний ключ».
+    """
+    ssh_key = TextAreaField(
+        'Приватный SSH ключ',
+        validators=[Optional()],
+        description='Оставьте пустым, чтобы сохранить текущий ключ'
+    )
+
 class HaproxyBackendForm(FlaskForm):
     name = StringField('Имя бэкенда', validators=[DataRequired()])
     group_id = SelectField('Группа серверов', coerce=int, validators=[Optional()])

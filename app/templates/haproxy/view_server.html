@@ -8,6 +8,7 @@
             <button type="submit" class="btn btn-warning">Перезагрузить HAProxy</button>
         </form>
         <a href="{{ url_for('haproxy.add_backend', server_id=server.id) }}" class="btn btn-success">Добавить бэкенд</a>
+        <a href="{{ url_for('haproxy.edit_server', server_id=server.id) }}" class="btn btn-outline-primary">Редактировать</a>
         <form action="{{ url_for('haproxy.delete_server', server_id=server.id) }}" method="post"
               onsubmit="return confirm('Удалить HAProxy сервер «{{ server.name }}» и все его бэкенды?')">
             <button type="submit" class="btn btn-danger">Удалить сервер</button>
@@ -20,7 +21,14 @@
         <div class="card mb-3">
             <div class="card-body">
                 <h5 class="card-title">Информация о сервере</h5>
-                <p><strong>IP:</strong> {{ server.ip }}:{{ server.ssh_port }}</p>
+                <p><strong>IP:</strong> {{ server.ip }}:{{ server.port }}</p>
+                <p><strong>Домен для конфигов:</strong>
+                    {% if server.endpoint_domain %}
+                        {{ server.endpoint_domain }}
+                    {% else %}
+                        <span class="text-muted">не задан — в конфиги пойдёт IP</span>
+                    {% endif %}
+                </p>
                 <p><strong>SSH пользователь:</strong> {{ server.ssh_username }}</p>
                 <p><strong>Путь к конфигу:</strong> {{ server.config_path }}</p>
                 <p><strong>Stats socket:</strong> {{ server.stats_socket_path }}</p>

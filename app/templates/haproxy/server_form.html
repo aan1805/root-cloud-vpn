@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 
+{# Общий шаблон для добавления и редактирования HAProxy сервера.
+   Ожидает: form, title, submit_label, cancel_url. #}
+
 {% block content %}
-<h1>Добавление HAProxy сервера</h1>
+<h1>{{ title }}</h1>
 
 <form method="POST">
     {{ form.hidden_tag() }}
-    
+
     <div class="row">
         <div class="col-md-6 mb-3">
             {{ form.name.label(class="form-label") }}
@@ -54,7 +57,10 @@
     <div class="mb-3">
         {{ form.ssh_key.label(class="form-label") }}
         {{ form.ssh_key(class="form-control", rows=10) }}
-        <small class="text-muted">Вставьте содержимое приватного SSH ключа (включая BEGIN и END строки)</small>
+        <small class="text-muted">
+            {{ form.ssh_key.description
+               or 'Вставьте содержимое приватного SSH ключа (включая BEGIN и END строки)' }}
+        </small>
         {% if form.ssh_key.errors %}
             <div class="text-danger">{{ form.ssh_key.errors[0] }}</div>
         {% endif %}
@@ -81,7 +87,7 @@
         </div>
     </div>
 
-    <button type="submit" class="btn btn-primary">Добавить</button>
-    <a href="{{ url_for('haproxy.index') }}" class="btn btn-secondary">Отмена</a>
+    <button type="submit" class="btn btn-primary">{{ submit_label }}</button>
+    <a href="{{ cancel_url }}" class="btn btn-secondary">Отмена</a>
 </form>
 {% endblock %}
