@@ -150,8 +150,12 @@ def update_haproxy_after_protocol_install(server, protocol):
                 'status': 'active'
             }
 
-            if server_entry not in backend.servers_json:
-                backend.servers_json.append(server_entry)
+            current_servers = list(backend.servers_json or [])
+            if server_entry not in current_servers:
+                # Колонка JSON не отслеживает изменения "на месте": append к
+                # backend.servers_json SQLAlchemy не увидит и не запишет в БД.
+                # Присваиваем новый список целиком.
+                backend.servers_json = current_servers + [server_entry]
                 db.session.commit()
 
                 # Добавляем в HAProxy динамически

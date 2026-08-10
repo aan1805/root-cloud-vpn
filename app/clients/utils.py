@@ -99,7 +99,11 @@ def apply_client_to_server(client):
     passphrase = decrypt_data(server.ssh_key_passphrase_encrypted) if server.ssh_key_passphrase_encrypted else None
 
     if protocol.protocol_type == 'awg':
-        assigned_ip = client.extra_params['assigned_ip']
+        assigned_ip = (client.extra_params or {}).get('assigned_ip')
+        if not assigned_ip:
+            # Раньше здесь был KeyError, который всплывал наружу как непонятная
+            # ошибка задачи вместо внятного сообщения в карточке клиента
+            return False, "Клиенту не выдан IP-адрес — перегенерируйте ключи"
 
         public_key = client.public_key
         psk_encrypted = client.extra_params.get('psk')
@@ -148,8 +152,8 @@ def apply_client_to_server(client):
 
         try:
             config = json.loads(stdout)
-        except:
-            return False, "Ошибка парсинга JSON"
+        except json.JSONDecodeError as e:
+            return False, f"Ошибка парсинга JSON: {e}"
 
         # Добавляем клиента в конфиг
         for inbound in config.get('inbounds', []):
@@ -169,8 +173,14 @@ def apply_client_to_server(client):
         escaped_json = new_config_json.replace("'", "'\\''")
         write_cmd = f"echo '{escaped_json}' | sudo tee /opt/amnezia/xray/config.json > /dev/null"
 
-        execute_ssh_command(server.ip, server.ssh_port, server.ssh_username,
-                            ssh_key, write_cmd, passphrase)
+        # Результат записи обязательно проверяем: раньше он игнорировался, и при
+        # неудачной записи клиент всё равно объявлялся добавленным
+        exit_code, stdout, stderr = execute_ssh_command(
+            server.ip, server.ssh_port, server.ssh_username,
+            ssh_key, write_cmd, passphrase
+        )
+        if exit_code != 0:
+            return False, f"Не удалось записать конфиг XRay: {stderr or stdout}"
 
         # Отправляем сигнал HUP для перезагрузки конфигурации без остановки соединений
         hup_cmd = "sudo docker exec xray-reality kill -HUP 1"
@@ -214,8 +224,13 @@ def remove_client_from_server(client):
             save_cmd = "sudo awg-quick save /opt/amnezia/awg/conf/wg0.conf"
             execute_ssh_command(server.ip, server.ssh_port, server.ssh_username, ssh_key, save_cmd, passphrase)
 
-            if 'assigned_ip' in client.extra_params:
-                del client.extra_params['assigned_ip']
+            if client.extra_params and 'assigned_ip' in client.extra_params:
+                # Колонка типа JSON не отслеживает изменения "на месте":
+                # del по вложенному ключу SQLAlchemy не увидит и не сохранит.
+                # Поэтому пересобираем словарь и присваиваем заново.
+                extra = dict(client.extra_params)
+                extra.pop('assigned_ip', None)
+                client.extra_params = extra
                 db.session.commit()
 
             return True, "Клиент удален из WireGuard"
