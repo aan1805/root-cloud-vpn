@@ -42,6 +42,7 @@ def create():
             name=form.name.data,
             group_id=form.group_id.data if form.group_id.data > 0 else None,
             ip=ip,
+            endpoint_domain=(form.endpoint_domain.data or '').strip() or None,
             ssh_port=port,
             ssh_username=username,
             ssh_key_encrypted=encrypted_key,
@@ -87,6 +88,7 @@ def edit(id):
         server.name = form.name.data
         server.group_id = form.group_id.data if form.group_id.data > 0 else None
         server.ip = ip
+        server.endpoint_domain = (form.endpoint_domain.data or '').strip() or None
         server.ssh_port = port
         server.ssh_username = username
         server.is_public = form.is_public.data

@@ -371,48 +371,68 @@ def collect_server_resources(self, server_id):
         pass
 
 
-def _fetch_fornex_field(base_url, order_id, field, headers):
+def _fetch_fornex_series(base_url, order_id, field, headers):
     """
-    Запрашивает одно поле статистики: GET {base_url}/vps/{order_id}/stats/{field}/
-    Возвращает float/int или None при ошибке.
+    Запрашивает одну метрику: GET {base_url}/vps/{order_id}/stats/{field}/
 
-    Ответ API может быть числом, строкой или объектом {"value": ...}.
+    API отдаёт не скаляр, а набор временных рядов в формате Highcharts:
+        {"series": [{"name": "Used", "data": [[unix_ms, value], ...]}], "subtitle": "..."}
+
+    Возвращает {имя_ряда: последнее_значение}. Пустой dict — если данных нет.
+    Допустимые имена полей: cpu, memory, traffic, disk, io
+    (ram/mem/net_rx/net_tx отвечают 400 "Invalid query").
     """
     url = f"{base_url}/vps/{order_id}/stats/{field}/"
     try:
         resp = http_requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return None
+    except Exception as e:
+        logger.warning(f"Fornex {field} для {order_id}: запрос не удался — {e}")
+        return {}
+
+    if resp.status_code != 200:
+        logger.warning(
+            f"Fornex {field} для {order_id}: HTTP {resp.status_code} — {resp.text[:200]}"
+        )
+        return {}
+
+    try:
         data = resp.json()
-        # Если вернули объект — берём поле value
-        if isinstance(data, dict):
-            val = data.get('value') or data.get(field) or data.get('data')
-        else:
-            val = data
-        return float(val) if val is not None else None
-    except Exception:
-        return None
+    except ValueError as e:
+        logger.warning(f"Fornex {field} для {order_id}: ответ не JSON — {e}")
+        return {}
+
+    result = {}
+    for series in (data.get('series') or []):
+        points = series.get('data') or []
+        if not points:
+            continue
+        # Точка — пара [timestamp_ms, value]; берём последнюю по времени
+        last = max(points, key=lambda p: p[0])
+        if len(last) >= 2 and last[1] is not None:
+            result[series.get('name')] = float(last[1])
+    return result
 
 
 def _collect_fornex_for(base_url, order_id, headers):
     """
-    Собирает cpu, ram, net_rx, net_tx для одного order_id.
+    Собирает метрики одного сервера.
     Возвращает dict с ключами cpu, mem, net_in, net_out (могут быть None).
+
+    cpu  — процент, отдаётся API напрямую.
+    mem  — процент, считается как Used/Total (API отдаёт байты).
+    net_* — скорость по данным ряда traffic (Incoming/Outgoing).
     """
-    # Поля, которые пробуем для каждой метрики (по приоритету)
-    cpu = _fetch_fornex_field(base_url, order_id, 'cpu', headers)
+    cpu_series = _fetch_fornex_series(base_url, order_id, 'cpu', headers)
+    cpu = cpu_series.get('CPU load')
 
-    mem = _fetch_fornex_field(base_url, order_id, 'ram', headers)
-    if mem is None:
-        mem = _fetch_fornex_field(base_url, order_id, 'mem', headers)
+    mem_series = _fetch_fornex_series(base_url, order_id, 'memory', headers)
+    total = mem_series.get('Total')
+    used = mem_series.get('Used')
+    mem = round(used / total * 100, 2) if total else None
 
-    net_in = _fetch_fornex_field(base_url, order_id, 'net_rx', headers)
-    if net_in is None:
-        net_in = _fetch_fornex_field(base_url, order_id, 'net_in', headers)
-
-    net_out = _fetch_fornex_field(base_url, order_id, 'net_tx', headers)
-    if net_out is None:
-        net_out = _fetch_fornex_field(base_url, order_id, 'net_out', headers)
+    traffic = _fetch_fornex_series(base_url, order_id, 'traffic', headers)
+    net_in = traffic.get('Incoming')
+    net_out = traffic.get('Outgoing')
 
     return dict(cpu=cpu, mem=mem, net_in=net_in, net_out=net_out)
 
@@ -422,7 +442,7 @@ def collect_fornex_stats(self):
     """
     Собирает статистику серверов через Fornex API.
     Endpoint: GET {base_url}/vps/{order_id}/stats/{field}/
-    Примеры полей: cpu, ram, net_rx, net_tx
+    Рабочие поля: cpu, memory, traffic, disk, io
     Auth: Authorization: Api-Key {key}
 
     Обновляет ServerStats для VPN-серверов и HaproxyStats для балансировщиков.
@@ -503,6 +523,70 @@ def cleanup_session_tokens(self):
 
     db.session.commit()
     return f"Удалено {len(old_tokens)} старых токенов"
+
+
+# server_stats/haproxy_stats пишутся каждые 15 минут на каждый сервер — это
+# сырые метрики, нужные только для свежих графиков.
+STATS_RETENTION_DAYS = 30
+# traffic_stats — суточные агрегаты по клиентам, на них строится история трафика
+# за 30 дней в карточке клиента. Держим заметно дольше: строк мало (одна на
+# клиента в сутки), а данные не восстановить.
+TRAFFIC_RETENTION_DAYS = 365
+# Удаляем порциями: одиночный DELETE на сотни тысяч строк держит долгую
+# транзакцию и заставляет и postgres, и питон-процесс раздувать память.
+STATS_DELETE_BATCH = 5000
+
+
+def _purge_old_rows(model, ts_column, cutoff, batch=STATS_DELETE_BATCH):
+    """
+    Удаляет строки старше cutoff порциями. Возвращает количество удалённых.
+
+    Работает на уровне SQL (без загрузки объектов в сессию) — иначе выборка
+    .all() на большой таблице поднимает все строки в память воркера.
+    """
+    total = 0
+    while True:
+        ids = [
+            row[0] for row in db.session.query(model.id)
+            .filter(ts_column < cutoff)
+            .limit(batch)
+            .all()
+        ]
+        if not ids:
+            break
+        deleted = db.session.query(model).filter(
+            model.id.in_(ids)
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        total += deleted
+        if deleted < batch:
+            break
+    return total
+
+
+@celery.task(bind=True)
+def cleanup_old_stats(self, retention_days=STATS_RETENTION_DAYS,
+                      traffic_retention_days=TRAFFIC_RETENTION_DAYS):
+    """Удаляет старые метрики, чтобы БД не росла бесконечно."""
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    traffic_cutoff = (datetime.utcnow() - timedelta(days=traffic_retention_days)).date()
+    results = {}
+    try:
+        results['server_stats'] = _purge_old_rows(ServerStats, ServerStats.timestamp, cutoff)
+        results['haproxy_stats'] = _purge_old_rows(HaproxyStats, HaproxyStats.timestamp, cutoff)
+        # У traffic_stats нет timestamp — суточный агрегат хранится в колонке date
+        results['traffic_stats'] = _purge_old_rows(TrafficStats, TrafficStats.date, traffic_cutoff)
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"cleanup_old_stats: ошибка очистки — {e}")
+        return f"Ошибка очистки: {e}"
+
+    summary = ", ".join(f"{k}={v}" for k, v in results.items())
+    logger.info(
+        f"cleanup_old_stats: метрики старше {retention_days} дн., "
+        f"трафик старше {traffic_retention_days} дн. — {summary}"
+    )
+    return f"Удалено строк: {summary}"
 
 
 @celery.task(bind=True)

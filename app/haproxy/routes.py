@@ -32,6 +32,7 @@ def add_server():
         haproxy_server = HaproxyServer(
             name=form.name.data,
             ip=form.ip.data,
+            endpoint_domain=(form.endpoint_domain.data or '').strip() or None,
             port=form.ssh_port.data,
             ssh_username=form.ssh_username.data,
             ssh_key_encrypted=encrypted_key,

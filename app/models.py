@@ -50,6 +50,10 @@ class Server(db.Model):
     group_id = db.Column(db.Integer, db.ForeignKey('server_groups.id'), nullable=True)
     name = db.Column(db.String(128), nullable=False)  # метка/имя сервера
     ip = db.Column(db.String(64), nullable=False)
+    # Домен, который попадает в клиентские конфиги вместо IP. Конфиг у клиента
+    # живёт годами: если там записан голый IP, смена адреса ломает все ранее
+    # выданные конфиги. С доменом достаточно переставить A-запись.
+    endpoint_domain = db.Column(db.String(255), nullable=True)
     ssh_port = db.Column(db.Integer, default=22)
     ssh_username = db.Column(db.String(64), nullable=False)
     ssh_key_encrypted = db.Column(db.Text, nullable=True)  # зашифрованный приватный ключ
@@ -126,6 +130,8 @@ class HaproxyServer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(64), nullable=False)
     ip = db.Column(db.String(45), nullable=False)
+    # Домен для клиентских конфигов (см. Server.endpoint_domain)
+    endpoint_domain = db.Column(db.String(255), nullable=True)
     port = db.Column(db.Integer, default=22)  # SSH порт
     ssh_username = db.Column(db.String(64), nullable=False)
     ssh_key_encrypted = db.Column(db.Text, nullable=False)

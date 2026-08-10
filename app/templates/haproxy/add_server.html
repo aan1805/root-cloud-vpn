@@ -24,6 +24,17 @@
     </div>
 
     <div class="row">
+        <div class="col-md-12 mb-3">
+            {{ form.endpoint_domain.label(class="form-label") }}
+            {{ form.endpoint_domain(class="form-control", placeholder="vpn.example.com") }}
+            <div class="form-text">{{ form.endpoint_domain.description }}</div>
+            {% if form.endpoint_domain.errors %}
+                <div class="text-danger">{{ form.endpoint_domain.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row">
         <div class="col-md-6 mb-3">
             {{ form.ssh_port.label(class="form-label") }}
             {{ form.ssh_port(class="form-control") }}

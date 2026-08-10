@@ -50,6 +50,11 @@ celery.conf.beat_schedule = {
         'task': 'app.tasks.collect_fornex_stats',
         'schedule': crontab(minute='*/15'),
     },
+    # Метрики пишутся каждые 15 минут и без чистки растут бесконечно
+    'cleanup-old-stats-daily': {
+        'task': 'app.tasks.cleanup_old_stats',
+        'schedule': crontab(hour=4, minute=30),
+    },
 }
 
 

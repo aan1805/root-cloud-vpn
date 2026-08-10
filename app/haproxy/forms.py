@@ -5,6 +5,11 @@ from wtforms.validators import DataRequired, Optional, NumberRange, IPAddress
 class HaproxyServerForm(FlaskForm):
     name = StringField('Название', validators=[DataRequired()])
     ip = StringField('IP адрес', validators=[DataRequired(), IPAddress()])
+    endpoint_domain = StringField(
+        'Домен для конфигов',
+        validators=[Optional()],
+        description='Попадает в конфиги клиентов вместо IP — позволяет менять сервер без перевыпуска конфигов.'
+    )
     ssh_port = IntegerField('SSH порт', validators=[DataRequired(), NumberRange(min=1, max=65535)], default=22)
     ssh_username = StringField('SSH пользователь', validators=[DataRequired()])
     ssh_key = TextAreaField('Приватный SSH ключ', validators=[DataRequired()])

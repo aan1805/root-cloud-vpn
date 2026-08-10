@@ -343,9 +343,23 @@ def apply_relay_uuid_to_group_servers(group, relay_uuid):
         )
 
 
+def endpoint_address(node):
+    """
+    Адрес, который попадёт в клиентский конфиг: домен, если задан, иначе IP.
+
+    Конфиг у клиента не обновляется автоматически, поэтому записанный туда голый
+    IP намертво привязывает клиента к конкретной машине: при смене адреса или
+    переносе на другой сервер все ранее выданные конфиги перестают работать.
+    Домен позволяет пережить переезд правкой DNS.
+    """
+    if node is None:
+        return None
+    return (getattr(node, 'endpoint_domain', None) or '').strip() or node.ip
+
+
 def resolve_client_endpoint(client):
     """Возвращает (address, port) для клиента с учётом HAProxy и групповых клиентов."""
-    connection_address = client.server.ip if client.server else None
+    connection_address = endpoint_address(client.server) if client.server else None
     connection_port = client.protocol.port if client.protocol else None
 
     if client.group_id:
@@ -355,7 +369,7 @@ def resolve_client_endpoint(client):
                 and group.reality_port and client.protocol_type == 'xray'):
             hs = group.reality_haproxy_server
             if hs and hs.xray_status == 'installed':
-                return hs.ip, group.reality_port
+                return endpoint_address(hs), group.reality_port
 
         from app.models import HaproxyBackend
         proto_type = client.protocol_type
@@ -369,7 +383,7 @@ def resolve_client_endpoint(client):
                 group_id=None
             ).first()
         if backend and backend.haproxy_server:
-            connection_address = backend.haproxy_server.ip
+            connection_address = endpoint_address(backend.haproxy_server)
             connection_port = backend.port
         elif client.group and client.group.servers:
             for srv in client.group.servers:
@@ -379,7 +393,7 @@ def resolve_client_endpoint(client):
                     None
                 )
                 if proto:
-                    connection_address = srv.ip
+                    connection_address = endpoint_address(srv)
                     connection_port = proto.port
                     break
 
