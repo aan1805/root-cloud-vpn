@@ -11,19 +11,28 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-root_cloud}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Только localhost: раньше порт торчал на 0.0.0.0 и база была доступна
+    # из интернета. Для удалённого доступа — SSH-туннель.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     networks:
       - rootcloud_network
+    logging: &default_logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7
     container_name: rootcloud_redis
     restart: unless-stopped
+    # Redis без пароля — наружу выставлять нельзя ни при каких условиях
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     networks:
       - rootcloud_network
+    logging: *default_logging
 
   web:
     build: .
@@ -40,11 +49,14 @@ services:
     volumes:
       - ./migrations:/app/migrations
       - ./logs:/app/logs
+    # Наружу панель ходит только через nginx (TLS). Прямой доступ на :5000
+    # в обход HTTPS не нужен.
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     command: ["./scripts/entrypoint-web.sh"]
     networks:
       - rootcloud_network
+    logging: *default_logging
 
   celery_worker:
     build: .
@@ -62,6 +74,7 @@ services:
     command: ["./scripts/entrypoint-celery.sh", "worker"]
     networks:
       - rootcloud_network
+    logging: *default_logging
 
   celery_beat:
     build: .
@@ -80,6 +93,7 @@ services:
     command: ["./scripts/entrypoint-celery.sh", "beat"]
     networks:
       - rootcloud_network
+    logging: *default_logging
 
 volumes:
   postgres_data:

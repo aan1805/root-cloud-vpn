@@ -3,7 +3,7 @@ from flask_login import login_required
 from app.clients import bp
 from app.clients.forms import ClientForm
 from app.clients.utils import generate_client_config, apply_client_to_server, generate_xray_keys, generate_wg_keys, \
-    remove_client_from_server, get_next_client_ip, generate_wg_psk
+    remove_client_from_server, get_next_client_ip, generate_wg_psk, generate_keys_for_client
 from app.models import Client, Server, ServerProtocol
 from app.extensions import db
 from app.utils.crypto import encrypt_data, decrypt_data
@@ -79,47 +79,11 @@ def create():
 
 def _generate_keys_internal(client):
     """Внутренняя функция генерации ключей (без редиректов и flash)"""
-    protocol_type = client.protocol_type
-    if not protocol_type and client.protocol:
-        protocol_type = client.protocol.protocol_type
-
-    if protocol_type == 'awg':
-        private_key, public_key = generate_wg_keys()
-        psk = generate_wg_psk()
-        client.public_key = public_key
-        client.private_key_encrypted = encrypt_data(private_key)
-        extra_params = dict(client.extra_params or {})
-        extra_params['psk'] = encrypt_data(psk)
-        
-        if 'assigned_ip' not in extra_params:
-            # Для групп IP должен быть уникальным во всей группе. 
-            # Для простоты используем глобальный инкремент или случайный IP в подсети
-            # В данном примере просто берем следующий свободный на первом сервере группы
-            ref_server_id = client.server_id
-            ref_protocol_id = client.protocol_id
-            
-            if not ref_server_id and client.group:
-                # Берем первый сервер из группы как эталонный для выдачи IP
-                first_server = client.group.servers[0] if client.group.servers else None
-                if first_server:
-                    ref_server_id = first_server.id
-                    proto = next((p for p in first_server.protocols if p.protocol_type == 'awg'), None)
-                    if proto: ref_protocol_id = proto.id
-
-            if ref_server_id and ref_protocol_id:
-                assigned_ip = get_next_client_ip(ref_server_id, ref_protocol_id)
-                extra_params['assigned_ip'] = assigned_ip
-            
-        client.extra_params = extra_params
-        db.session.commit()
-
-    elif protocol_type == 'xray':
-        uuid_val = generate_xray_keys()
-        extra_params = dict(client.extra_params or {})
-        extra_params['uuid'] = uuid_val
-        extra_params['email'] = client.email or f"{client.name}@client"
-        client.extra_params = extra_params
-        db.session.commit()
+    # Раньше здесь лежала своя копия логики, которая для группового клиента брала
+    # «эталонный» первый сервер группы и считала IP только по прямым клиентам этого
+    # сервера — из-за чего адреса пересекались с клиентами группы. Используем общую
+    # реализацию, где IP выдаётся по всем клиентам на том же интерфейсе.
+    generate_keys_for_client(client)
 
 
 @bp.route('/<int:id>')

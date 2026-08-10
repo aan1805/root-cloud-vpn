@@ -4,7 +4,13 @@ import json
 import re
 from io import StringIO
 from app.utils.crypto import decrypt_data
-from app.servers.ssh import parse_private_key
+from app.servers.ssh import (
+    parse_private_key,
+    CONNECT_TIMEOUT as SSH_CONNECT_TIMEOUT,
+    BANNER_TIMEOUT as SSH_BANNER_TIMEOUT,
+    AUTH_TIMEOUT as SSH_AUTH_TIMEOUT,
+    COMMAND_TIMEOUT as SSH_COMMAND_TIMEOUT,
+)
 
 NGINX_STREAM_CONF = '/etc/nginx/stream.d/rootcloud.conf'
 
@@ -24,42 +30,71 @@ class HaproxyManager:
         self.config_path = server.config_path
         self.socket_path = server.stats_socket_path
 
+    def _open_ssh(self):
+        """
+        Открывает SSH-соединение с ограниченными таймаутами.
+
+        connect(timeout=...) ограничивает только установку TCP-соединения — без
+        banner/auth таймаутов и keepalive зависший на той стороне сервер держит
+        вызывающий поток бесконечно (см. app/servers/ssh.py).
+        """
+        pkey = parse_private_key(self.ssh_key, self.passphrase)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            self.host, port=self.ssh_port, username=self.username, pkey=pkey,
+            timeout=SSH_CONNECT_TIMEOUT,
+            banner_timeout=SSH_BANNER_TIMEOUT,
+            auth_timeout=SSH_AUTH_TIMEOUT,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        transport = client.get_transport()
+        if transport is not None:
+            transport.set_keepalive(15)
+        return client
+
     def _execute_ssh(self, command):
         """Выполняет SSH команду на сервере"""
+        client = None
         try:
-            pkey = parse_private_key(self.ssh_key, self.passphrase)
-
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.host, port=self.ssh_port, username=self.username, pkey=pkey, timeout=30)
-
-            stdin, stdout, stderr = client.exec_command(command)
-            exit_code = stdout.channel.recv_exit_status()
+            client = self._open_ssh()
+            stdin, stdout, stderr = client.exec_command(command, timeout=SSH_COMMAND_TIMEOUT)
             output = stdout.read().decode('utf-8')
             error = stderr.read().decode('utf-8')
-            client.close()
+            exit_code = stdout.channel.recv_exit_status()
             return exit_code, output, error
 
         except Exception as e:
             return -1, "", str(e)
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     def _sftp_write(self, content, remote_path):
         """Записывает content в remote_path через SFTP (безопасно для любого содержимого)"""
+        ssh_client = None
         try:
-            pkey = parse_private_key(self.ssh_key, self.passphrase)
-
-            ssh_client = paramiko.SSHClient()
-            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh_client.connect(self.host, port=self.ssh_port, username=self.username, pkey=pkey, timeout=30)
-
+            ssh_client = self._open_ssh()
             sftp = ssh_client.open_sftp()
-            with sftp.file(remote_path, 'w') as f:
-                f.write(content)
-            sftp.close()
-            ssh_client.close()
+            sftp.get_channel().settimeout(SSH_COMMAND_TIMEOUT)
+            try:
+                with sftp.file(remote_path, 'w') as f:
+                    f.write(content)
+            finally:
+                sftp.close()
             return True, ""
         except Exception as e:
             return False, str(e)
+        finally:
+            if ssh_client is not None:
+                try:
+                    ssh_client.close()
+                except Exception:
+                    pass
 
     def _execute_socket_command(self, command):
         """Отправляет команду в HAProxy stats socket"""
@@ -166,28 +201,33 @@ class HaproxyManager:
             return  # уже есть
 
         # Читаем текущий nginx.conf через SFTP
+        ssh_client = None
         try:
-            pkey = parse_private_key(self.ssh_key, self.passphrase)
-            ssh_client = paramiko.SSHClient()
-            ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh_client.connect(self.host, port=self.ssh_port, username=self.username, pkey=pkey, timeout=30)
-
+            ssh_client = self._open_ssh()
             sftp = ssh_client.open_sftp()
-            with sftp.file('/etc/nginx/nginx.conf', 'r') as f:
-                current = f.read().decode('utf-8')
+            sftp.get_channel().settimeout(SSH_COMMAND_TIMEOUT)
+            try:
+                with sftp.file('/etc/nginx/nginx.conf', 'r') as f:
+                    current = f.read().decode('utf-8')
 
-            stream_block = '\n\n# RootCloud: UDP stream proxy\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n'
-            new_content = current + stream_block
+                stream_block = '\n\n# RootCloud: UDP stream proxy\nstream {\n    include /etc/nginx/stream.d/*.conf;\n}\n'
+                new_content = current + stream_block
 
-            temp_path = f"/tmp/nginx.conf.{int(time.time())}"
-            with sftp.file(temp_path, 'w') as f:
-                f.write(new_content)
-            sftp.close()
-            ssh_client.close()
+                temp_path = f"/tmp/nginx.conf.{int(time.time())}"
+                with sftp.file(temp_path, 'w') as f:
+                    f.write(new_content)
+            finally:
+                sftp.close()
         except Exception:
             return  # если не можем прочитать — пробуем через append как fallback
         else:
             self._execute_ssh(f"sudo cp {temp_path} /etc/nginx/nginx.conf && sudo rm {temp_path}")
+        finally:
+            if ssh_client is not None:
+                try:
+                    ssh_client.close()
+                except Exception:
+                    pass
 
     def update_nginx_stream_config(self, awg_backends):
         """
@@ -217,6 +257,7 @@ class HaproxyManager:
         )
 
         errors = []
+        persist_lines = []
         for backend in awg_backends:
             if not backend.servers_json:
                 continue
@@ -270,9 +311,69 @@ class HaproxyManager:
                 "2>/dev/null || sudo iptables -I FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
             )
 
+            # Те же правила для восстановления после ребута (iptables не персистентен)
+            persist_lines += [
+                f"iptables -t nat -C PREROUTING -p udp --dport {listen_port} -j DNAT --to-destination {dst} 2>/dev/null"
+                f" || iptables -t nat -I PREROUTING 1 -p udp --dport {listen_port} -j DNAT --to-destination {dst}",
+                f"iptables -t nat -C POSTROUTING -p udp -d {srv_ip} --dport {srv_port} -j MASQUERADE 2>/dev/null"
+                f" || iptables -t nat -A POSTROUTING -p udp -d {srv_ip} --dport {srv_port} -j MASQUERADE",
+                f"iptables -C FORWARD -p udp -d {srv_ip} --dport {srv_port} -j ACCEPT 2>/dev/null"
+                f" || iptables -I FORWARD 1 -p udp -d {srv_ip} --dport {srv_port} -j ACCEPT",
+            ]
+
+        self._install_nat_persistence(persist_lines)
+
         if errors:
             return False, "; ".join(errors)
         return True, "iptables DNAT+MASQUERADE правила обновлены"
+
+    def _install_nat_persistence(self, persist_lines):
+        """
+        Записывает применённые DNAT-правила в oneshot systemd-юнит.
+
+        iptables-правила живут только в памяти ядра: после перезагрузки прокси
+        весь UDP-форвардинг на AWG-узлы исчезает и VPN молча перестаёт работать.
+        Юнит переигрывает их при каждой загрузке (после docker.service, который
+        перестраивает свои цепочки).
+        """
+        if not persist_lines:
+            return
+
+        body = "\n".join(persist_lines)
+        script = (
+            "#!/bin/bash\n"
+            "# Сгенерировано RootCloud — не редактировать вручную.\n"
+            "set -u\n"
+            "sysctl -w net.ipv4.ip_forward=1 >/dev/null\n"
+            "iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null"
+            " || iptables -I FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n"
+            f"{body}\n"
+            "exit 0\n"
+        )
+        unit = (
+            "[Unit]\n"
+            "Description=UDP DNAT rules forwarding AmneziaWG traffic to the VPN node\n"
+            "After=network-online.target docker.service\n"
+            "Wants=network-online.target\n\n"
+            "[Service]\n"
+            "Type=oneshot\n"
+            "RemainAfterExit=yes\n"
+            "ExecStart=/usr/local/sbin/awg-proxy-nat-apply.sh\n\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+        )
+
+        self._execute_ssh(
+            "sudo tee /usr/local/sbin/awg-proxy-nat-apply.sh > /dev/null << 'RC_NAT_EOF'\n"
+            f"{script}RC_NAT_EOF"
+        )
+        self._execute_ssh("sudo chmod +x /usr/local/sbin/awg-proxy-nat-apply.sh")
+        self._execute_ssh(
+            "sudo tee /etc/systemd/system/awg-proxy-nat.service > /dev/null << 'RC_UNIT_EOF'\n"
+            f"{unit}RC_UNIT_EOF"
+        )
+        self._execute_ssh("sudo systemctl daemon-reload")
+        self._execute_ssh("sudo systemctl enable awg-proxy-nat.service 2>/dev/null || true")
 
     # -------------------------------------------------------------------------
     # HAProxy backend / frontend конфиг (только TCP протоколы: xray, openvpn)

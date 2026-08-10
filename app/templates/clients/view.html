@@ -37,6 +37,9 @@
                             {% elif client.status == 'pending' %}<span class="badge bg-info">Применяется...</span>
                             {% elif client.status == 'error' %}<span class="badge bg-danger">Ошибка</span>
                             {% else %}<span class="badge bg-secondary">{{ client.status }}</span>{% endif %}
+                            {% if client.extra_params and client.extra_params.get('last_error') %}
+                                <div class="text-danger small mt-2">{{ client.extra_params['last_error'] }}</div>
+                            {% endif %}
                         </td>
                     </tr>
                     <tr><th class="ps-3">Создан</th><td>{{ client.created_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>

@@ -35,33 +35,48 @@ def get_next_client_ip(server_id=None, protocol_id=None, group_id=None, protocol
     """
     Определяет следующий свободный IP адрес для клиента в подсети 10.8.0.0/24.
 
-    Для одиночного клиента: ищет по server_id + protocol_id.
-    Для группового клиента: ищет по group_id + protocol_type.
-    В обоих случаях также проверяет конкурирующий тип, чтобы избежать коллизий.
+    Прямой клиент сервера и клиент группы, в которую этот сервер входит, попадают
+    в один и тот же интерфейс wg0 и делят одну подсеть. Поэтому считать их
+    раздельно нельзя: занятые адреса собираются по всем клиентам, чьё множество
+    целевых серверов пересекается с целевым множеством нового клиента.
     """
-    from app.models import Client
+    from app.models import Client, Server, ServerProtocol
+
+    if not protocol_type and protocol_id:
+        proto = ServerProtocol.query.get(protocol_id)
+        if proto:
+            protocol_type = proto.protocol_type
+
+    group_servers_cache = {}
+
+    def _target_servers(c_server_id, c_group_id):
+        """Серверы, на чей интерфейс реально попадёт клиент."""
+        if c_server_id:
+            return {c_server_id}
+        if c_group_id:
+            if c_group_id not in group_servers_cache:
+                group_servers_cache[c_group_id] = {
+                    s.id for s in Server.query.filter_by(group_id=c_group_id).all()
+                }
+            return group_servers_cache[c_group_id]
+        return set()
+
+    scope = _target_servers(server_id, group_id)
+
+    query = Client.query
+    if protocol_type:
+        query = query.filter(Client.protocol_type == protocol_type)
 
     used_ips = set()
-
-    def _extract_octets(clients):
-        for c in clients:
-            if c.extra_params and 'assigned_ip' in c.extra_params:
-                m = re.search(r'10\.8\.0\.(\d+)', c.extra_params['assigned_ip'])
-                if m:
-                    used_ips.add(int(m.group(1)))
-
-    if group_id:
-        # Все клиенты группы с этим протоколом (group_id=group_id, server_id=NULL)
-        _extract_octets(Client.query.filter_by(
-            group_id=group_id,
-            protocol_type=protocol_type
-        ).all())
-    elif server_id and protocol_id:
-        # Прямые клиенты сервера
-        _extract_octets(Client.query.filter_by(
-            server_id=server_id,
-            protocol_id=protocol_id
-        ).all())
+    for c in query.all():
+        if not c.extra_params or not c.extra_params.get('assigned_ip'):
+            continue
+        # Пустой scope — не смогли определить цель, считаем все адреса занятыми
+        if scope and not (_target_servers(c.server_id, c.group_id) & scope):
+            continue
+        m = re.search(r'10\.8\.0\.(\d+)', c.extra_params['assigned_ip'])
+        if m:
+            used_ips.add(int(m.group(1)))
 
     # Ищем первый свободный IP от 2 до 254 (10.8.0.1 занят сервером)
     for i in range(2, 255):

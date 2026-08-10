@@ -100,10 +100,44 @@ sudo iptables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null || sudo iptables -A FORWAR
 sudo iptables -C FORWARD -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || sudo iptables -A FORWARD -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 sudo iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o $IFACE -j MASQUERADE 2>/dev/null || sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o $IFACE -j MASQUERADE
 
-# Автозапуск через systemd
-sudo mkdir -p /etc/amneziawg
+# Автозапуск через systemd.
+# awg-quick резолвит имя интерфейса в /etc/amnezia/amneziawg/<iface>.conf — без симлинка
+# именно туда awg-quick@wg0 падает после ребута. /etc/amneziawg оставлен для совместимости.
+sudo mkdir -p /etc/amneziawg /etc/amnezia/amneziawg
 sudo ln -sf /opt/amnezia/awg/conf/wg0.conf /etc/amneziawg/wg0.conf
+sudo ln -sf /opt/amnezia/awg/conf/wg0.conf /etc/amnezia/amneziawg/wg0.conf
 sudo systemctl enable awg-quick@wg0 2>/dev/null || true
+
+# NAT-правила не переживают ребут — заворачиваем их в oneshot-юнит
+sudo tee /usr/local/sbin/awg-nat-apply.sh > /dev/null << 'NATEOF'
+#!/bin/bash
+set -u
+IFACE=$(ip route | awk '/^default/ {{print $5; exit}}')
+[ -z "$IFACE" ] && exit 1
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+iptables -C FORWARD -i wg0 -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i wg0 -j ACCEPT
+iptables -C FORWARD -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o "$IFACE" -j MASQUERADE
+exit 0
+NATEOF
+sudo chmod +x /usr/local/sbin/awg-nat-apply.sh
+sudo tee /etc/systemd/system/awg-nat.service > /dev/null << 'NATUNITEOF'
+[Unit]
+Description=NAT/forward rules for AmneziaWG clients (10.8.0.0/24)
+After=network-online.target docker.service awg-quick@wg0.service
+Wants=network-online.target
+Requires=awg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/awg-nat-apply.sh
+
+[Install]
+WantedBy=multi-user.target
+NATUNITEOF
+sudo systemctl daemon-reload
+sudo systemctl enable awg-nat.service 2>/dev/null || true
 
 # Сохраняем параметры для панели
 sudo tee /opt/amnezia/awg/conf/params.json > /dev/null << PARAMS_EOF

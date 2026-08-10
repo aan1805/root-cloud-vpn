@@ -725,21 +725,54 @@ def apply_client_task(self, client_id):
 
         if success_count > 0:
             return f"Successfully applied to {success_count}/{len(servers)} servers"
+        _mark_client_failed(client, f"Не удалось применить ни на одном сервере группы {group_name}")
         return "Failed to apply to any server in group"
 
     # Обычный клиент привязанный к одному серверу
     else:
         if not client.server:
             logger.error(f"Client {client.name} has no server assigned")
+            _mark_client_failed(client, "Клиенту не назначен сервер")
             return "Error: No server assigned"
-            
+
         logger.info(f"Applying client {client.name} to server {client.server.name}")
         success, message = apply_client_to_server(client)
         if success:
             client.status = 'active'
+            _clear_client_error(client)
             db.session.commit()
             return "Success"
+        _mark_client_failed(client, message)
         return f"Error: {message}"
+
+
+def _mark_client_failed(client, message):
+    """
+    Переводит клиента в статус 'error' и сохраняет причину.
+
+    Без этого неудачное применение оставляло клиента в 'pending' навсегда:
+    задача Celery завершалась «успешно» с текстом ошибки в возвращаемом значении,
+    которое нигде не читается, и в панели конфиг вечно висел как «применяется».
+    Статус 'error' уже отрисовывается шаблонами и снимает блокировку с кнопки
+    «Применить», так что повторить установку можно из UI.
+    """
+    try:
+        client.status = 'error'
+        extra = dict(client.extra_params or {})
+        extra['last_error'] = str(message)[:500]
+        client.extra_params = extra
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Failed to mark client {client.id} as failed: {e}")
+        db.session.rollback()
+
+
+def _clear_client_error(client):
+    """Убирает текст прошлой ошибки после успешного применения."""
+    if client.extra_params and 'last_error' in client.extra_params:
+        extra = dict(client.extra_params)
+        extra.pop('last_error', None)
+        client.extra_params = extra
 
 
 @celery.task(bind=True)
